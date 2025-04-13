@@ -21,6 +21,9 @@ class TelegramClient {
       fs.mkdirSync(dataDir, { recursive: true });
     }
 
+    // Initialize dialog cache for storing access hashes
+    this.dialogCache = new Map();
+
     // Initialize the MTProto client
     this.mtproto = new MTProto({
       api_id: this.apiId,
@@ -132,6 +135,9 @@ class TelegramClient {
 
       console.log(`Retrieved ${result.chats.length} chats`);
       
+      // Update dialog cache with the received chats
+      this._updateDialogCache(result.chats);
+      
       return {
         chats: result.chats,
         users: result.users,
@@ -142,6 +148,113 @@ class TelegramClient {
       console.error('Error fetching dialogs:', error);
       throw error;
     }
+  }
+  
+  // Get all dialogs by making multiple requests
+  async getAllDialogs(batchSize = 100) {
+    try {
+      console.log('Fetching all dialogs...');
+      
+      let allChats = [];
+      let allUsers = [];
+      let allMessages = [];
+      let allDialogs = [];
+      
+      let offset = 0;
+      let hasMore = true;
+      
+      while (hasMore) {
+        const result = await this.mtproto.call('messages.getDialogs', {
+          offset,
+          limit: batchSize,
+          offset_peer: { _: 'inputPeerSelf' },
+        });
+        
+        allChats = [...allChats, ...result.chats];
+        allUsers = [...allUsers, ...result.users];
+        allMessages = [...allMessages, ...result.messages];
+        allDialogs = [...allDialogs, ...result.dialogs];
+        
+        // Update the dialog cache with the received chats
+        this._updateDialogCache(result.chats);
+        
+        // Check if we received fewer dialogs than requested, which means we've reached the end
+        if (result.dialogs.length < batchSize) {
+          hasMore = false;
+        } else {
+          offset += batchSize;
+        }
+        
+        console.log(`Retrieved ${result.chats.length} chats at offset ${offset}`);
+      }
+      
+      console.log(`Total chats retrieved: ${allChats.length}`);
+      
+      return {
+        chats: allChats,
+        users: allUsers,
+        messages: allMessages,
+        dialogs: allDialogs
+      };
+    } catch (error) {
+      console.error('Error fetching all dialogs:', error);
+      throw error;
+    }
+  }
+  
+  // Update the dialog cache with chat information
+  _updateDialogCache(chats) {
+    if (!chats || !Array.isArray(chats)) return;
+    
+    for (const chat of chats) {
+      if (!chat || !chat.id) continue;
+      
+      // Store only channels and users that have access_hash
+      if ((chat._ === 'channel' || chat._ === 'user') && chat.access_hash) {
+        this.dialogCache.set(chat.id, {
+          type: chat._,
+          id: chat.id,
+          access_hash: chat.access_hash,
+          title: chat.title || chat.username || chat.first_name
+        });
+      } else if (chat._ === 'chat') {
+        this.dialogCache.set(chat.id, {
+          type: chat._,
+          id: chat.id,
+          title: chat.title
+        });
+      }
+    }
+  }
+  
+  // Get peer input for a chat by ID
+  getPeerInputById(id) {
+    const cachedChat = this.dialogCache.get(`${id}`);
+    
+    if (!cachedChat) {
+      throw new Error(`Chat with ID ${id} not found in cache. Run getAllDialogs first.`);
+    }
+    
+    if (cachedChat.type === 'channel') {
+      return {
+        _: 'inputPeerChannel',
+        channel_id: cachedChat.id,
+        access_hash: cachedChat.access_hash,
+      };
+    } else if (cachedChat.type === 'chat') {
+      return {
+        _: 'inputPeerChat',
+        chat_id: cachedChat.id,
+      };
+    } else if (cachedChat.type === 'user') {
+      return {
+        _: 'inputPeerUser',
+        user_id: cachedChat.id,
+        access_hash: cachedChat.access_hash,
+      };
+    }
+    
+    throw new Error(`Unsupported chat type: ${cachedChat.type}`);
   }
 
   // Get messages from a specific chat
@@ -204,6 +317,88 @@ class TelegramClient {
     return messages
       .map(msg => msg.message || '')
       .filter(msg => regex.test(msg));
+  }
+
+  // Get messages from a specific chat using ID
+  async getMessagesByChannelId(channelId, limit = 100) {
+    try {
+      // Convert string IDs to numbers if necessary
+      const id = typeof channelId === 'string' ? parseInt(channelId, 10) : channelId;
+      
+      if (isNaN(id)) {
+        throw new Error('Invalid channel ID provided');
+      }
+      
+      // Get peer input from cache
+      const peer = this.getPeerInputById(id);
+      const cachedChat = this.dialogCache.get(`${id}`);
+      
+      console.log(`Fetching up to ${limit} messages from channel ID ${id} (${cachedChat.title || 'Unknown'})`);
+      
+      const messagesResult = await this.mtproto.call('messages.getHistory', {
+        peer,
+        offset_id: 0,
+        offset_date: 0,
+        add_offset: 0,
+        limit,
+        max_id: 0,
+        min_id: 0,
+        hash: 0,
+      });
+
+      return messagesResult.messages;
+    } catch (error) {
+      console.error('Error fetching channel messages:', error);
+      throw error;
+    }
+  }
+  
+  // Save dialog cache to file
+  async saveDialogCache(cachePath = './data/dialog_cache.json') {
+    try {
+      const resolvedPath = path.resolve(cachePath);
+      const cacheDir = path.dirname(resolvedPath);
+      
+      // Create directory if it doesn't exist
+      if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
+      
+      // Convert Map to object for serialization
+      const cacheObject = Object.fromEntries(this.dialogCache);
+      
+      fs.writeFileSync(resolvedPath, JSON.stringify(cacheObject, null, 2));
+      console.log(`Dialog cache saved to ${resolvedPath}`);
+      
+      return true;
+    } catch (error) {
+      console.error('Error saving dialog cache:', error);
+      return false;
+    }
+  }
+  
+  // Load dialog cache from file
+  async loadDialogCache(cachePath = './data/dialog_cache.json') {
+    try {
+      const resolvedPath = path.resolve(cachePath);
+      
+      if (!fs.existsSync(resolvedPath)) {
+        console.log(`Dialog cache file not found at ${resolvedPath}`);
+        return false;
+      }
+      
+      const cacheData = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
+      
+      // Convert object back to Map
+      this.dialogCache = new Map(Object.entries(cacheData));
+      
+      console.log(`Dialog cache loaded from ${resolvedPath} with ${this.dialogCache.size} entries`);
+
+      return true;
+    } catch (error) {
+      console.error('Error loading dialog cache:', error);
+      return false;
+    }
   }
 }
 
