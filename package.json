@@ -5,8 +5,8 @@
   "description": "Example MCP client-server",
   "main": "mcp-client.js",
   "scripts": {
-    "server": "node example-sse-mcp-server.js",
-    "client": "node mcp-client.js"
+    "client": "node mcp-client.js",
+    "start": "node telegram-fastmcp.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
