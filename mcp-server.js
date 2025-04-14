@@ -198,18 +198,6 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
-server.addTool({
-  name: "add",
-  description: "Add two numbers",
-  parameters: z.object({
-    a: z.number(),
-    b: z.number(),
-  }),
-  execute: async (args) => {
-    return String(args.a + args.b);
-  },
-});
-
 // Telegram tools
 server.addTool({
   name: "listChannels",

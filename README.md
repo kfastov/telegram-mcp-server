@@ -1,6 +1,6 @@
 # Telegram Client Library and MCP Server
 
-This project provides both a Telegram client library (`telegram-client.js`) and an MCP (Model Context Protocol) server (`telegram-fastmcp.js`) for AI assistants to interact with Telegram. The server component is built using the **FastMCP** library.
+This project provides both a Telegram client library (`telegram-client.js`) and an MCP (Model Context Protocol) server (`mcp-server.js`) enabling AI assistants (such as Claude, Cline, or Cursor) to interact with Telegram via the user client API (not bot API). This enables capabilities such as reading message history from channels and chats, with potential for sending messages on behalf of users in future updates. The server component is built using the **FastMCP** library.
 
 ## Features
 
@@ -12,9 +12,9 @@ This project provides both a Telegram client library (`telegram-client.js`) and 
 - Fetching messages from specific chats (using cached IDs)
 - Filtering messages by pattern (e.g., regex)
 
-### MCP Server (`telegram-fastmcp.js`)
+### MCP Server (`mcp-server.js`)
 
-- Provides MCP tools for LLMs:
+- Provides MCP tools for AI agents:
   - **listChannels**: Lists cached channels/chats.
   - **searchChannels**: Searches cached channels/chats by keywords.
   - **getChannelMessages**: Retrieves messages from a specific channel/chat using its ID, with optional regex filtering.
@@ -96,7 +96,7 @@ Run the standalone client example:
 node client.js
 ```
 
-### Using the MCP Server (`telegram-fastmcp.js`)
+### Using the MCP Server (`mcp-server.js`)
 
 This server exposes Telegram interactions as tools for MCP-compatible AI assistants (like Claude).
 
@@ -115,9 +115,6 @@ This server exposes Telegram interactions as tools for MCP-compatible AI assista
     ```
 
 4.  You can connect an MCP-compatible client (like an AI assistant) to this endpoint.
-
-For more details about the MCP server tools and usage, see [MCP-README.md](MCP-README.md).
-For information about the code architecture, see [CODE_STRUCTURE.md](CODE_STRUCTURE.md).
 
 ## API Reference (`telegram-client.js`)
 
@@ -150,19 +147,13 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 
 ## Files in this Repository
 
-- `.gitignore`: Specifies intentionally untracked files that Git should ignore.
 - `client.js`: An example script demonstrating usage of the `telegram-client.js` library.
-- `CODE_STRUCTURE.md`: Explains the (previous) organization of the MCP server code. _(Note: May need updating to reflect `telegram-fastmcp.js`)_.
-- `index.js`: Original basic example script using the `telegram-client.js` library.
-- `MCP-README.md`: Specific README for the MCP server functionality and tools.
-- `package.json`: Node.js project manifest file, including dependencies and scripts.
-- `README.md`: This file - General overview of the project.
 - `telegram-client.js`: The core Telegram client library handling authentication and API interaction.
-- `telegram-fastmcp.js`: The MCP server implementation (using FastMCP) providing Telegram tools over SSE.
+- `mcp-server.js`: The MCP server implementation (using FastMCP) providing Telegram tools over SSE.
 
 ## Using with Claude or other MCP-compatible Assistants
 
-The MCP server (`telegram-fastmcp.js`) can be used with Claude or other assistants supporting the Model Context Protocol over Server-Sent Events.
+The MCP server (`mcp-server.js`) can be used with Claude or other assistants supporting the Model Context Protocol over Server-Sent Events.
 
 Example workflow:
 
