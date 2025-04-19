@@ -57,11 +57,28 @@ class TelegramClient {
     try {
       // Check if session file exists
       if (this.hasSession()) {
-        console.log('Session file found, attempting to use existing session.');
-        // If the session file exists, the MTProto client should automatically use it
-        return true;
+        console.log('Session file found, attempting to validate session.');
+        try {
+          // Attempt a simple API call to validate the session
+          await this.mtproto.call('users.getUsers', {
+            id: [{ _: 'inputUserSelf' }],
+          });
+          console.log('Existing session is valid.');
+          return true; // Session is valid
+        } catch (error) {
+          console.warn(`Session validation failed: ${error.message || JSON.stringify(error)}. Assuming session is invalid.`);
+          // Delete the invalid session file
+          try {
+            fs.unlinkSync(this.sessionPath);
+            console.log('Deleted invalid session file.');
+          } catch (unlinkError) {
+            console.error('Error deleting invalid session file:', unlinkError);
+          }
+          // Proceed to log in again
+        }
       }
 
+      console.log('No valid session found. Starting login process...');
       // Request to send a code to the user's phone
       const { phone_code_hash } = await this.mtproto.call('auth.sendCode', {
         phone_number: this.phoneNumber,

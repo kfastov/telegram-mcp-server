@@ -27,12 +27,11 @@ async function initializeDialogCache() {
   try {
     console.log('Initializing dialog cache...');
     
-    // First, try to login if needed
-    if (!telegramClient.hasSession()) {
-      const loginSuccess = await telegramClient.login();
-      if (!loginSuccess) {
-        throw new Error('Failed to login to Telegram');
-      }
+    // First, ensure we are logged in (this now handles validation)
+    const loginSuccess = await telegramClient.login();
+    if (!loginSuccess) {
+      // Throw an error specifically for login failure
+      throw new Error('Failed to login to Telegram. Cannot proceed.');
     }
     
     // Try to load existing cache
@@ -316,11 +315,12 @@ console.log('Starting server and initializing Telegram dialog cache...');
 initializeDialogCache().then(success => {
   if (success) {
     console.log('Dialog cache initialization complete, starting server...');
+    server.start({
+      transportType: "sse",
+      sse: {endpoint: "/sse", port: 8080},
+    });
   } else {
-    console.error('Failed to initialize dialog cache. Starting server anyway...');
+    console.error('Failed to initialize dialog cache. Exiting...');
+    process.exit(1); // Exit with a non-zero code indicating failure
   }
-  server.start({
-    transportType: "sse",
-    sse: {endpoint: "/sse", port: 8080},
-  });
 });
