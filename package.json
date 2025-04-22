@@ -6,8 +6,41 @@
   "main": "mcp-server.js",
   "scripts": {
     "client": "node mcp-client.js",
-    "start": "node mcp-server.js"
+    "start": "node mcp-server.js",
+    "prepare": "npm run build",
+    "build": "echo \"No build step required\"",
+    "prepublishOnly": "npm test",
+    "test": "echo \"No tests specified yet\""
   },
+  "files": [
+    "mcp-server.js",
+    "telegram-client.js",
+    "LIBRARY.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kfastov/telegram-mcp-server.git"
+  },
+  "keywords": [
+    "telegram",
+    "telegram-client",
+    "mcp",
+    "mcp-server",
+    "mtproto",
+    "fastmcp",
+    "claude",
+    "cursor",
+    "ai-assistant",
+    "ai-agent"
+  ],
+  "author": "Konstantin Fastov",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/kfastov/telegram-mcp-server/issues"
+  },
+  "homepage": "https://github.com/kfastov/telegram-mcp-server#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
     "@mtproto/core": "^6.3.0",

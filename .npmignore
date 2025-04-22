@@ -1,0 +1,30 @@
+# Development and environment files
+.git
+.gitignore
+.env*
+node_modules/
+.vscode/
+.idea/
+
+# Data files (potentially containing sensitive information)
+data/
+*.log
+
+# Tests
+test/
+tests/
+__tests__/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentation that shouldn't be published
+docs/
+examples/
+contributing.md
+
+# Source maps and build artifacts
+*.map
+.nyc_output
+coverage/ 
