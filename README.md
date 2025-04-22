@@ -1,119 +1,123 @@
-# Telegram Client Library and MCP Server
+# Telegram MCP Server
 
-This project provides both a Telegram client library (`telegram-client.js`) and an MCP (Model Context Protocol) server (`mcp-server.js`) enabling AI assistants (such as Claude, Cline, or Cursor) to interact with Telegram via the user client API (not bot API). This enables capabilities such as reading message history from channels and chats, with potential for sending messages on behalf of users in future updates. The server component is built using the **FastMCP** library.
-
-For detailed information about the Telegram client library, see [LIBRARY.md](LIBRARY.md).
+An MCP server allowing AI assistants (like Claude) to interact with your Telegram account using the user client API (not the bot API). Built with `@mtproto/core` and the **FastMCP** framework.
 
 ## Features
 
-### MCP Server (`mcp-server.js`)
+### Tools
 
-- Provides MCP tools for AI agents:
-  - **listChannels**: Lists cached channels/chats.
-  - **searchChannels**: Searches cached channels/chats by keywords.
-  - **getChannelMessages**: Retrieves messages from a specific channel/chat using its ID, with optional regex filtering.
-- Communicates using the Model Context Protocol over Server-Sent Events (SSE).
-- Initializes and maintains a cache of Telegram dialogs (`./data/dialog_cache.json`) for faster responses and reduced API calls.
+- `listChannels`
 
-## Setup
+  - Lists available Telegram channels/chats accessible by the account, based on the server's cache.
+  - Parameters:
+    - `limit` (number, optional): Maximum number of channels to return (default: 50).
+  - Output: A list of channels/chats with their ID, title, type, and access hash (if applicable).
 
-### Obtaining Telegram API Credentials
+- `searchChannels`
 
-1. **Obtain API credentials**
+  - Searches the cached channels/chats by keywords in their names.
+  - Parameters:
+    - `keywords` (string): Keywords to search for in channel names.
+    - `limit` (number, optional): Maximum number of results to return (default: 100).
+  - Output: A list of matching channels/chats.
 
-   - Create a new app at [https://core.telegram.org/api/obtaining_api_id](https://core.telegram.org/api/obtaining_api_id)
-   - Fill out the form to receive your `api_id` and `api_hash`
+- `getChannelMessages`
+  - Retrieves recent messages from a specific channel/chat using its ID.
+  - Parameters:
+    - `channelId` (number): The numeric ID of the channel/chat (obtained from `listChannels` or `searchChannels`).
+    - `limit` (number, optional): Maximum number of messages to return (default: 100).
+    - `filterPattern` (string, optional): A JavaScript-compatible regular expression to filter messages by their text content.
+  - Output: A list of messages containing ID, date, text, and sender ID.
 
-2. **Prepare your Telegram account**
-   Because this MCP server is technically a custom Telegram app, your account needs to have Two-Step Verification set up:
-   - Go to Settings → Privacy and Security
-   - Enable Two-Step Verification and set your password
+## Prerequisites
 
-### Configuration and Installation
+1.  **Node.js:** Version 18 or later recommended.
+2.  **Telegram Account:**
+    - You need an active Telegram account.
+    - **Two-Step Verification (2FA)** must be enabled on your account (Settings → Privacy and Security → Two-Step Verification).
+3.  **Telegram API Credentials:**
+    - Obtain an `api_id` and `api_hash` by creating a new application at [https://core.telegram.org/api/obtaining_api_id](https://core.telegram.org/api/obtaining_api_id).
 
-1. Configure the following environment variables with your Telegram API credentials:
+## Installation
 
+1.  Clone this repository:
+    ```bash
+    git clone https://github.com/your-username/telegram-mcp-server.git # Replace with your repo URL
+    cd telegram-mcp-server
+    ```
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+## Configuration
+
+There are two separate configurations that need to be set up:
+
+1. **MCP Server Configuration:**
+
+   Configure the Telegram MCP server using environment variables (in a `.env` file or directly in your environment):
+
+   ```dotenv
+   TELEGRAM_API_ID=YOUR_API_ID
+   TELEGRAM_API_HASH=YOUR_API_HASH
+   TELEGRAM_PHONE_NUMBER=YOUR_PHONE_NUMBER_WITH_COUNTRY_CODE # e.g., +15551234567
    ```
-   TELEGRAM_API_ID=your_api_id
-   TELEGRAM_API_HASH=your_api_hash
-   TELEGRAM_PHONE_NUMBER=your_phone_number
-   # PORT=8080 # Optional: The MCP server defaults to 8080 if not set here or overridden in code
+
+   Replace the placeholder values with your actual credentials.
+
+2. **MCP Client Configuration:**
+
+   Configure client software (Claude Desktop, Cursor, etc.) to connect to the MCP server by modifying their configuration files:
+
+   ```json
+   {
+     "mcpServers": {
+       "telegram": {
+         "url": "http://localhost:8080/sse",
+         "disabled": false,
+         "timeout": 30
+       }
+     }
+   }
    ```
 
-   These variables can be set in your environment or placed in a `.env` file in the project root.
+   For Claude Desktop, the config file is located at:
 
-2. Install dependencies:
+   - On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
 
-   ```bash
-   npm install
-   ```
+   **Important:** Restart your MCP client to apply the changes.
 
-## Usage
+## Running the Server
 
-### Using the MCP Server (`mcp-server.js`)
-
-This server exposes Telegram interactions as tools for MCP-compatible AI assistants (like Claude).
-
-1.  Start the MCP server:
-    _(First, ensure you have logged in at least once via the client or by running the server previously, creating `./data/session.json`)_
+1.  **Initial Login (Important First Step):**
+    The first time you run the server (or if your session expires/is invalid), it needs to authenticate with Telegram. Run it directly from your terminal:
 
     ```bash
     npm start
     ```
 
-2.  The server will initialize the Telegram client and attempt to load/build the dialog cache (`./data/dialog_cache.json`). This might take time on the first run.
-3.  The MCP server endpoint will be available via Server-Sent Events (SSE) at:
+    - The server will use the credentials from your `.env` file.
+    - It will prompt you in the terminal to enter the login code sent to your Telegram account and your 2FA password if required.
+    - Upon successful login, a session file (`./data/session.json`) will be created. This file allows the server to log in automatically in the future without requiring codes/passwords.
+    - The server will also attempt to build or load a cache of your chats (`./data/dialog_cache.json`). This can take some time on the first run, especially with many chats. Subsequent starts will be faster if the cache exists.
 
-    ```
-    http://localhost:8080/sse
-    ```
+2.  **Normal Operation:**
+    You'll need to start the server manually by running `npm start` in the project directory.
 
-4.  You can connect an MCP-compatible client (like an AI assistant) to this endpoint.
-
-## Files in this Repository
-
-- `client.js`: An example script demonstrating usage of the `telegram-client.js` library.
-- `telegram-client.js`: The core Telegram client library handling authentication and API interaction.
-- `mcp-server.js`: The MCP server implementation (using FastMCP) providing Telegram tools over SSE.
-- `LIBRARY.md`: Detailed documentation for the Telegram client library.
-
-## Using with Claude or other MCP-compatible Assistants
-
-The MCP server (`mcp-server.js`) can be used with Claude or other assistants supporting the Model Context Protocol over Server-Sent Events.
-
-Example workflow:
-
-1.  Start the MCP server (`npm start`).
-2.  Connect Claude (or another assistant) to the MCP server using the SSE endpoint: `http://localhost:8080/sse`.
-3.  The assistant can now use the available tools:
-    - `listChannels`
-    - `searchChannels`
-    - `getChannelMessages` (optionally with `filterPattern`)
-
-### Example Interactions with Claude
-
-When connected to the MCP server, you can ask Claude natural language questions like:
-
-- "Show me all available Telegram channels"
-- "Search for channels about crypto"
-- "Get the last 10 messages from channel 1234567890"
-- "Find messages containing UUIDs in the CryptoFrog channel"
-
-### Advanced Usage
-
-#### Filtering Messages with Regular Expressions
-
-You can use the `filterPattern` parameter with `getChannelMessages` to find specific types of messages. Some examples:
-
-- `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` - Find UUIDs
-- `https?://\\S+` - Find URLs
-- `#[a-zA-Z0-9]+` - Find hashtags
+    Once the server is running, your MCP client (e.g., Claude Desktop) will connect to it via the URL specified in its configuration (`http://localhost:8080/sse` by default).
 
 ## Troubleshooting
 
-- **Authentication Issues**: If you encounter authentication problems, delete the session file in the `data/` directory and restart the server to re-authenticate.
-- **Server Crashes**: Check your environment variables and ensure your Telegram API credentials are correct.
-- **Access Denied to Channels**: Ensure your Telegram account has access to the channels you're trying to query.
+- **Login Prompts:** If the server keeps prompting for login codes/passwords when started by the MCP client, ensure the `data/session.json` file exists and is valid. You might need to run `npm start` manually once to refresh the session. Also, check that the file permissions allow the user running the MCP client to read/write the `data` directory.
+- **Cache Issues:** If channels seem outdated or missing, you can delete `./data/dialog_cache.json` and restart the server (run `npm start` manually) to force a full refresh. This might take time.
+- **Cannot Find Module:** Ensure you run `npm install` in the project directory. If the MCP client starts the server, make sure the working directory is set correctly or use absolute paths.
+- **Other Issues:** If you encounter any other problems, feel free to open an issue in [this server repo](https://github.com/kfastov/telegram-mcp-server).
+
+## Telegram Client Library
+
+This repository also contains the underlying `telegram-client.js` library used by the MCP server. For details on using the library directly (e.g., for custom scripting), see [LIBRARY.md](LIBRARY.md).
 
 ## License
 
