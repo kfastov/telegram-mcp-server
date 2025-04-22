@@ -17,20 +17,36 @@ For detailed information about the Telegram client library, see [LIBRARY.md](LIB
 
 ## Setup
 
-1.  Create a `.env` file with your Telegram API credentials:
+### Obtaining Telegram API Credentials
 
-    ```dotenv
-    TELEGRAM_API_ID=your_api_id
-    TELEGRAM_API_HASH=your_api_hash
-    TELEGRAM_PHONE_NUMBER=your_phone_number
-    # PORT=8080 # Optional: The MCP server defaults to 8080 if not set here or overridden in code
-    ```
+1. **Obtain API credentials**
 
-2.  Install dependencies:
+   - Create a new app at [https://core.telegram.org/api/obtaining_api_id](https://core.telegram.org/api/obtaining_api_id)
+   - Fill out the form to receive your `api_id` and `api_hash`
 
-    ```bash
-    npm install
-    ```
+2. **Prepare your Telegram account**
+   Because this MCP server is technically a custom Telegram app, your account needs to have Two-Step Verification set up:
+   - Go to Settings → Privacy and Security
+   - Enable Two-Step Verification and set your password
+
+### Configuration and Installation
+
+1. Configure the following environment variables with your Telegram API credentials:
+
+   ```
+   TELEGRAM_API_ID=your_api_id
+   TELEGRAM_API_HASH=your_api_hash
+   TELEGRAM_PHONE_NUMBER=your_phone_number
+   # PORT=8080 # Optional: The MCP server defaults to 8080 if not set here or overridden in code
+   ```
+
+   These variables can be set in your environment or placed in a `.env` file in the project root.
+
+2. Install dependencies:
+
+   ```bash
+   npm install
+   ```
 
 ## Usage
 
