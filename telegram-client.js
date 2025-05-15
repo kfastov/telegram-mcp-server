@@ -417,6 +417,173 @@ class TelegramClient {
       return false;
     }
   }
+
+  // Helper function to add delay between API calls
+  async delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Initialize dialog cache with throttling to avoid FLOOD_WAIT
+  async initializeDialogCache(dialogCachePath = './data/dialog_cache.json') {
+    try {
+      console.log('Initializing dialog cache...');
+      
+      // First, ensure we are logged in
+      const loginSuccess = await this.login();
+      if (!loginSuccess) {
+        // Throw an error specifically for login failure
+        throw new Error('Failed to login to Telegram. Cannot proceed.');
+      }
+      
+      // Try to load existing cache
+      let cacheLoaded = false;
+      try {
+        cacheLoaded = await this.loadDialogCache(dialogCachePath);
+        console.log(`Dialog cache ${cacheLoaded ? 'loaded successfully' : 'not found or empty'}`);
+      } catch (error) {
+        console.log('Error loading dialog cache:', error.message);
+      }
+      
+      // If cache is empty or couldn't be loaded, fetch dialogs with careful throttling
+      if (!cacheLoaded || this.dialogCache.size === 0) {
+        console.log('Fetching all dialogs with throttling...');
+        
+        let allChats = new Map(); // Use Map to prevent duplicates
+        let lastDate = 0;         // Use date-based pagination
+        let lastMsgId = 0;        // Track last message ID for pagination
+        let lastPeer = null;      // Last peer for offset
+        let hasMore = true;
+        let batchSize = 100;
+        let retryCount = 0;
+        let batchCount = 0;
+        const MAX_RETRIES = 3;
+        
+        while (hasMore && retryCount < MAX_RETRIES) {
+          try {
+            batchCount++;
+            console.log(`Fetching dialogs batch #${batchCount} with date offset ${lastDate || 'none'}...`);
+            
+            // Call Telegram API with throttling and proper pagination
+            const result = await this.mtproto.call('messages.getDialogs', {
+              offset_date: lastDate,
+              offset_id: lastMsgId,
+              offset_peer: lastPeer || { _: 'inputPeerEmpty' },
+              limit: batchSize,
+              hash: 0
+            });
+            
+            // Process the results
+            if (result && result.chats && result.chats.length > 0) {
+              const newChatCount = result.chats.length;
+              const prevSize = allChats.size;
+              
+              // Add chats to our Map to de-duplicate
+              result.chats.forEach(chat => {
+                if (chat && chat.id) {
+                  allChats.set(chat.id, chat);
+                }
+              });
+              
+              // Update dialog cache
+              this._updateDialogCache(result.chats);
+              
+              console.log(`Retrieved ${newChatCount} chats (${allChats.size - prevSize} new), total unique now: ${allChats.size}`);
+              
+              // Check if we've reached the end based on received count or no dialogs
+              if (!result.dialogs || result.dialogs.length === 0 || result.dialogs.length < batchSize) {
+                hasMore = false;
+                console.log('Reached end of dialogs (received less than requested)');
+              } else if (result.dialogs.length > 0) {
+                // Update pagination parameters from the last dialog
+                const lastDialog = result.dialogs[result.dialogs.length - 1];
+                const lastMessage = result.messages.find(m => m.id === lastDialog.top_message);
+                
+                if (lastMessage) {
+                  lastDate = lastMessage.date;
+                  lastMsgId = lastMessage.id;
+                  lastPeer = lastDialog.peer;
+                  
+                  console.log(`Updated pagination: last_date=${lastDate}, last_msg_id=${lastMsgId}`);
+                } else {
+                  console.log('Could not find last message for pagination, stopping');
+                  hasMore = false;
+                }
+                
+                // Add delay to avoid rate limiting
+                console.log(`Waiting 2 seconds before next batch...`);
+                await this.delay(2000);
+              } else {
+                // No more dialogs
+                hasMore = false;
+              }
+              
+              // Safety check - if we get the same chats multiple times, stop
+              if (batchCount > 1 && newChatCount === allChats.size && newChatCount === prevSize) {
+                console.log('No new chats in this batch, likely reached the end');
+                hasMore = false;
+              }
+            } else {
+              // No results or unexpected response
+              hasMore = false;
+              console.log('No chats in response or unexpected response format');
+            }
+            
+            // Reset retry counter on success
+            retryCount = 0;
+          } catch (error) {
+            console.error(`Error fetching dialogs: ${error.message || JSON.stringify(error)}`);
+            
+            // Handle FLOOD_WAIT errors by waiting the specified time
+            if (error.error_code === 420 && error.error_message) {
+              const waitMatch = error.error_message.match(/FLOOD_WAIT_(\d+)/);
+              if (waitMatch && waitMatch[1]) {
+                const waitSeconds = parseInt(waitMatch[1], 10);
+                console.log(`Rate limited, waiting ${waitSeconds} seconds before retrying...`);
+                await this.delay(waitSeconds * 1000);
+                retryCount++;
+              } else {
+                // Unknown flood wait, use exponential backoff
+                const backoff = Math.pow(2, retryCount) * 5;
+                console.log(`Unknown rate limit, backing off for ${backoff} seconds...`);
+                await this.delay(backoff * 1000);
+                retryCount++;
+              }
+            } else {
+              // For other errors, back off and retry
+              retryCount++;
+              await this.delay(5000 * retryCount);
+            }
+          }
+        }
+        
+        // Extract chats from Map for final count
+        const finalChats = Array.from(allChats.values());
+        console.log(`Finished fetching dialogs. Found ${finalChats.length} unique chats.`);
+        
+        // Save the cache after successful fetch
+        try {
+          await this.saveDialogCache(dialogCachePath);
+        } catch (error) {
+          console.error('Error saving dialog cache:', error.message);
+        }
+      }
+      
+      console.log(`Dialog cache initialized with ${this.dialogCache.size} entries`);
+      return true;
+    } catch (error) {
+      console.error('Failed to initialize dialog cache:', error);
+      return false;
+    }
+  }
+
+  // Simplified login check
+  async ensureLogin() {
+    // Just verify we have a session
+    if (!this.hasSession()) {
+      throw new Error('Not logged in to Telegram. Please restart the server.');
+    }
+    return true;
+  }
 }
 
 export default TelegramClient; 
