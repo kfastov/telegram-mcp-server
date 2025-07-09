@@ -576,6 +576,59 @@ class TelegramClient {
     }
   }
 
+  // Save cached chats to the database
+  async saveDialogsToDb(db) {
+    for (const chat of this.dialogCache.values()) {
+      await db.saveChat(chat);
+    }
+  }
+
+  // Fetch messages from a chat in batches and save them to the database
+  async saveChatMessagesToDb(chatId, db, { batchSize = 100, after = 0 } = {}) {
+    const peer = this.getPeerInputById(chatId);
+    let offsetId = 0;
+    let hasMore = true;
+    let totalSaved = 0;
+
+    while (hasMore) {
+      const res = await this.mtproto.call('messages.getHistory', {
+        peer,
+        offset_id: offsetId,
+        offset_date: 0,
+        add_offset: 0,
+        limit: batchSize,
+        max_id: 0,
+        min_id: 0,
+        hash: 0,
+      });
+
+      const msgs = res.messages || [];
+      if (msgs.length === 0) break;
+
+      for (const msg of msgs) {
+        if (msg.date <= after) {
+          hasMore = false;
+          break;
+        }
+        await db.saveMessage({
+          id: msg.id,
+          chat_id: chatId,
+          date: msg.date,
+          text: msg.message || '',
+          from_id: msg.from_id?.user_id || msg.from_id?.channel_id || null,
+        });
+        totalSaved++;
+      }
+
+      offsetId = msgs[msgs.length - 1].id;
+      if (msgs[msgs.length - 1].date <= after) {
+        hasMore = false;
+      }
+    }
+
+    return totalSaved;
+  }
+
   // Simplified login check
   async ensureLogin() {
     // Just verify we have a session
@@ -585,5 +638,4 @@ class TelegramClient {
     return true;
   }
 }
-
 export default TelegramClient; 

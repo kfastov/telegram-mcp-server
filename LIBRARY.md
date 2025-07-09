@@ -92,3 +92,5 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 - `filterMessagesByPattern(messages, pattern)`: Filters an array of message _strings_ by a regex pattern.
 - `saveDialogCache(cachePath)`: Saves the internal `dialogCache` Map to a JSON file (default: `./data/dialog_cache.json`).
 - `loadDialogCache(cachePath)`: Loads the `dialogCache` Map from a JSON file.
+- `saveDialogsToDb(db)`: Saves all cached chats to a PostgreSQL database using the helper from `db.js`.
+- `saveChatMessagesToDb(chatId, db, options)`: Incrementally fetches messages from a chat and stores them in the database. `options` may include `batchSize` and `after` (UNIX timestamp) for continuous updates.
