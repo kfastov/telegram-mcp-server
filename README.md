@@ -89,6 +89,26 @@ There are two separate configurations that need to be set up:
 
    **Important:** Restart your MCP client to apply the changes.
 
+## PostgreSQL Integration
+
+The library can persist chat data to a PostgreSQL database. Set the `DATABASE_URL` environment variable to your connection string, then use the helper `Database` class:
+
+```javascript
+import { Database } from './db.js';
+import TelegramClient from './telegram-client.js';
+
+const db = new Database(process.env.DATABASE_URL);
+await db.connect();
+await db.init();
+
+const client = new TelegramClient(...);
+await client.initializeDialogCache();
+await client.saveDialogsToDb(db); // store chats
+await client.saveChatMessagesToDb(chatId, db, { batchSize: 100, after: 0 });
+```
+
+`saveChatMessagesToDb` supports incremental saving by specifying the `after` timestamp to fetch only newer messages. Repeated calls can be used for continuous history updates.
+
 ## Running the Server
 
 1.  **Initial Login (Important First Step):**
