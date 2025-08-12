@@ -1,13 +1,16 @@
 import { FastMCP } from "fastmcp";
 import { z } from "zod"; // Or any validation library that supports Standard Schema
 import TelegramClient from './telegram-client.js';
+import { Database } from './db.js';
 import dotenv from 'dotenv';
 
 // Load environment variables
 dotenv.config();
 
-// Cache path for dialog data
-const DIALOG_CACHE_PATH = './data/dialog_cache.json';
+
+const db = new Database(process.env.DATABASE_URL);
+await db.connect();
+await db.init();
 
 // Initialize Telegram client
 const telegramClient = new TelegramClient(
@@ -137,7 +140,7 @@ server.addTool({
 
 // Initialize dialog cache at server startup
 console.log('Starting server and initializing Telegram dialog cache...');
-telegramClient.initializeDialogCache(DIALOG_CACHE_PATH).then(success => {
+telegramClient.initializeDialogCache(db).then(success => {
   if (success) {
     console.log('Dialog cache initialization complete, starting server...');
     server.start({

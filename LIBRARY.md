@@ -31,13 +31,13 @@ async function main() {
   // Login to Telegram (will prompt for code/password if needed)
   await client.login();
 
-  // Load dialog cache (optional, but recommended for performance)
+  // Load dialog cache from PostgreSQL (optional, but recommended for performance)
   // Or use getAllDialogs() to fetch and populate the cache
-  await client.loadDialogCache(); // Default path: './data/dialog_cache.json'
+  await client.loadDialogCache(db);
   if (client.dialogCache.size === 0) {
     console.log("Cache empty, fetching all dialogs to build cache...");
     await client.getAllDialogs(); // Fetches all dialogs and populates cache
-    await client.saveDialogCache(); // Save cache for next time
+    await client.saveDialogCache(db); // Save cache for next time
   }
 
   // Get dialogs from the cache
@@ -90,7 +90,7 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 - `getChatMessages(chatObject, limit)`: Gets messages from a specific chat _object_ (less commonly used now).
 - `getMessagesByChannelId(channelId, limit)`: Gets messages from a specific chat/channel using its ID (uses cached peer info).
 - `filterMessagesByPattern(messages, pattern)`: Filters an array of message _strings_ by a regex pattern.
-- `saveDialogCache(cachePath)`: Saves the internal `dialogCache` Map to a JSON file (default: `./data/dialog_cache.json`).
-- `loadDialogCache(cachePath)`: Loads the `dialogCache` Map from a JSON file.
+- `saveDialogCache(db)`: Saves the internal `dialogCache` Map to the `chats` table in PostgreSQL.
+- `loadDialogCache(db)`: Loads the `dialogCache` Map from the database.
 - `saveDialogsToDb(db)`: Saves all cached chats to a PostgreSQL database using the helper from `db.js`.
 - `saveChatMessagesToDb(chatId, db, options)`: Incrementally fetches messages from a chat and stores them in the database. `options` may include `batchSize` and `after` (UNIX timestamp) for continuous updates.
