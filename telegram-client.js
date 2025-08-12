@@ -370,46 +370,35 @@ class TelegramClient {
     }
   }
   
-  // Save dialog cache to file
-  async saveDialogCache(cachePath = './data/dialog_cache.json') {
+  // Save dialog cache to the database
+  async saveDialogCache(db) {
     try {
-      const resolvedPath = path.resolve(cachePath);
-      const cacheDir = path.dirname(resolvedPath);
-      
-      // Create directory if it doesn't exist
-      if (!fs.existsSync(cacheDir)) {
-        fs.mkdirSync(cacheDir, { recursive: true });
+      for (const chat of this.dialogCache.values()) {
+        await db.saveChat(chat);
       }
-      
-      // Convert Map to object for serialization
-      const cacheObject = Object.fromEntries(this.dialogCache);
-      
-      fs.writeFileSync(resolvedPath, JSON.stringify(cacheObject, null, 2));
-      console.log(`Dialog cache saved to ${resolvedPath}`);
-      
+      console.log('Dialog cache saved to database');
       return true;
     } catch (error) {
       console.error('Error saving dialog cache:', error);
       return false;
     }
   }
-  
-  // Load dialog cache from file
-  async loadDialogCache(cachePath = './data/dialog_cache.json') {
+
+  // Load dialog cache from the database
+  async loadDialogCache(db) {
     try {
-      const resolvedPath = path.resolve(cachePath);
-      
-      if (!fs.existsSync(resolvedPath)) {
-        console.log(`Dialog cache file not found at ${resolvedPath}`);
-        return false;
+      const chats = await db.getAllChats();
+      this.dialogCache = new Map();
+      for (const chat of chats) {
+        this.dialogCache.set(`${chat.id}`, {
+          id: chat.id,
+          title: chat.title,
+          type: chat.type,
+          access_hash: chat.access_hash,
+        });
       }
-      
-      const cacheData = JSON.parse(fs.readFileSync(resolvedPath, 'utf8'));
-      
-      // Convert object back to Map
-      this.dialogCache = new Map(Object.entries(cacheData));
-      
-      console.log(`Dialog cache loaded from ${resolvedPath} with ${this.dialogCache.size} entries`);
+
+      console.log(`Dialog cache loaded from database with ${this.dialogCache.size} entries`);
 
       return true;
     } catch (error) {
@@ -424,7 +413,7 @@ class TelegramClient {
   }
 
   // Initialize dialog cache with throttling to avoid FLOOD_WAIT
-  async initializeDialogCache(dialogCachePath = './data/dialog_cache.json') {
+  async initializeDialogCache(db) {
     try {
       console.log('Initializing dialog cache...');
       
@@ -435,10 +424,10 @@ class TelegramClient {
         throw new Error('Failed to login to Telegram. Cannot proceed.');
       }
       
-      // Try to load existing cache
+      // Try to load existing cache from DB
       let cacheLoaded = false;
       try {
-        cacheLoaded = await this.loadDialogCache(dialogCachePath);
+        cacheLoaded = await this.loadDialogCache(db);
         console.log(`Dialog cache ${cacheLoaded ? 'loaded successfully' : 'not found or empty'}`);
       } catch (error) {
         console.log('Error loading dialog cache:', error.message);
@@ -562,7 +551,7 @@ class TelegramClient {
         
         // Save the cache after successful fetch
         try {
-          await this.saveDialogCache(dialogCachePath);
+          await this.saveDialogCache(db);
         } catch (error) {
           console.error('Error saving dialog cache:', error.message);
         }

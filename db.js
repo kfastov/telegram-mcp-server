@@ -55,4 +55,11 @@ export class Database {
       [id, chat_id, date, text, from_id || null]
     );
   }
+
+  async getAllChats() {
+    const res = await this.client.query(
+      'SELECT id, title, type, access_hash FROM chats'
+    );
+    return res.rows;
+  }
 }
