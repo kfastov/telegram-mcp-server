@@ -28,19 +28,9 @@ async function main() {
     // Optional: specify session path, default is './data/session.json'
   );
 
-  // Login to Telegram (will prompt for code/password if needed)
-  await client.login();
+  await client.initializeDialogCache();
 
-  // Load dialog cache (optional, but recommended for performance)
-  // Or use getAllDialogs() to fetch and populate the cache
-  await client.loadDialogCache(); // Default path: './data/dialog_cache.json'
-  if (client.dialogCache.size === 0) {
-    console.log("Cache empty, fetching all dialogs to build cache...");
-    await client.getAllDialogs(); // Fetches all dialogs and populates cache
-    await client.saveDialogCache(); // Save cache for next time
-  }
-
-  // Get dialogs from the cache
+  // Get dialogs discovered during initialization
   const dialogs = Array.from(client.dialogCache.values());
 
   // Print all cached chats
@@ -82,13 +72,7 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 #### Methods
 
 - `login()`: Authenticates with Telegram (handles new logins, 2FA, and session reuse).
-- `hasSession()`: Checks if a valid session file exists.
-- `getDialogs(limit, offset)`: Gets a batch of dialogs (chats) directly from Telegram API.
-- `getAllDialogs(batchSize)`: Fetches all dialogs progressively, populating the internal cache (`dialogCache`).
-- `_updateDialogCache(chats)`: Internal method to update the cache.
-- `getPeerInputById(id)`: Gets the necessary `InputPeer` object from the cache for API calls.
-- `getChatMessages(chatObject, limit)`: Gets messages from a specific chat _object_ (less commonly used now).
-- `getMessagesByChannelId(channelId, limit)`: Gets messages from a specific chat/channel using its ID (uses cached peer info).
+- `initializeDialogCache()`: Ensures authentication and refreshes the in-memory dialog list from Telegram.
+- `ensureLogin()`: Throws if the client is not currently authorized.
+- `getMessagesByChannelId(channelId, limit)`: Returns recent messages for the cached chat/channel.
 - `filterMessagesByPattern(messages, pattern)`: Filters an array of message _strings_ by a regex pattern.
-- `saveDialogCache(cachePath)`: Saves the internal `dialogCache` Map to a JSON file (default: `./data/dialog_cache.json`).
-- `loadDialogCache(cachePath)`: Loads the `dialogCache` Map from a JSON file.

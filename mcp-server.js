@@ -6,9 +6,6 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-// Cache path for dialog data
-const DIALOG_CACHE_PATH = './data/dialog_cache.json';
-
 // Initialize Telegram client
 const telegramClient = new TelegramClient(
   process.env.TELEGRAM_API_ID,
@@ -35,12 +32,15 @@ server.addTool({
     const limit = args.limit || 50;
     // Get from cache instead of making a new request
     const chatEntries = Array.from(telegramClient.dialogCache.entries()).slice(0, limit);
-    const formattedChats = chatEntries.map(([id, chat]) => ({
-      id: id,
-      title: chat.title || 'Unknown',
-      type: chat.type,
-      access_hash: chat.access_hash || 'N/A'
-    }));
+    const formattedChats = chatEntries.map(([id, chat]) => {
+      const numericId = Number(id);
+      return {
+        id: Number.isNaN(numericId) ? id : numericId,
+        title: chat.title || 'Unknown',
+        type: chat.type,
+        access_hash: chat.access_hash || 'N/A'
+      };
+    });
     
     return `Retrieved ${formattedChats.length} channels/chats from cache (total in cache: ${telegramClient.dialogCache.size}).\n${JSON.stringify(formattedChats, null, 2)}`;
   },
@@ -64,12 +64,15 @@ server.addTool({
     const matchingChats = chatEntries
       .filter(([_, chat]) => chat.title && chat.title.toLowerCase().includes(keywords))
       .slice(0, searchLimit)
-      .map(([id, chat]) => ({
-        id: id,
-        title: chat.title || 'Unknown',
-        type: chat.type,
-        access_hash: chat.access_hash || 'N/A'
-      }));
+      .map(([id, chat]) => {
+        const numericId = Number(id);
+        return {
+          id: Number.isNaN(numericId) ? id : numericId,
+          title: chat.title || 'Unknown',
+          type: chat.type,
+          access_hash: chat.access_hash || 'N/A'
+        };
+      });
     
     return `Found ${matchingChats.length} channels/chats matching "${args.keywords}" in the cache (total in cache: ${telegramClient.dialogCache.size}).\n${JSON.stringify(matchingChats, null, 2)}`;
   },
@@ -95,7 +98,7 @@ server.addTool({
       const messages = await telegramClient.getMessagesByChannelId(channelId, limit);
       
       // Get channel details from cache
-      const cachedChat = telegramClient.dialogCache.get(`${channelId}`);
+      const cachedChat = telegramClient.dialogCache.get(String(channelId));
       if (!cachedChat) {
         throw new Error(`Channel with ID ${channelId} not found in cache.`);
       }
@@ -104,8 +107,9 @@ server.addTool({
       let formattedMessages = messages.map(msg => ({
         id: msg.id,
         date: msg.date ? new Date(msg.date * 1000).toISOString() : 'unknown',
-        text: msg.message || '',
-        from_id: msg.from_id?.user_id
+        text: msg.text || msg.message || '',
+        from_id: typeof msg.from_id === 'string' ? msg.from_id :
+                  msg.from_id?.user_id
                   || msg.from_id?.channel_id
                   || msg.peer_id?.user_id
                   || msg.peer_id?.channel_id
@@ -137,7 +141,7 @@ server.addTool({
 
 // Initialize dialog cache at server startup
 console.log('Starting server and initializing Telegram dialog cache...');
-telegramClient.initializeDialogCache(DIALOG_CACHE_PATH).then(success => {
+telegramClient.initializeDialogCache().then(success => {
   if (success) {
     console.log('Dialog cache initialization complete, starting server...');
     server.start({

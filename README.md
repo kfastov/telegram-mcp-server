@@ -101,7 +101,7 @@ There are two separate configurations that need to be set up:
     - The server will use the credentials from your `.env` file.
     - It will prompt you in the terminal to enter the login code sent to your Telegram account and your 2FA password if required.
     - Upon successful login, a session file (`./data/session.json`) will be created. This file allows the server to log in automatically in the future without requiring codes/passwords.
-    - The server will also attempt to build or load a cache of your chats (`./data/dialog_cache.json`). This can take some time on the first run, especially with many chats. Subsequent starts will be faster if the cache exists.
+    - The server will enumerate your chats after login. This can take some time on the first run, especially with many chats.
 
 2.  **Normal Operation:**
     You'll need to start the server manually by running `npm start` in the project directory.
@@ -111,7 +111,7 @@ There are two separate configurations that need to be set up:
 ## Troubleshooting
 
 - **Login Prompts:** If the server keeps prompting for login codes/passwords when started by the MCP client, ensure the `data/session.json` file exists and is valid. You might need to run `npm start` manually once to refresh the session. Also, check that the file permissions allow the user running the MCP client to read/write the `data` directory.
-- **Cache Issues:** If channels seem outdated or missing, you can delete `./data/dialog_cache.json` and restart the server (run `npm start` manually) to force a full refresh. This might take time.
+- **Cache Issues:** If channels seem outdated or missing, restart the server; it will refresh the chat list on boot.
 - **Cannot Find Module:** Ensure you run `npm install` in the project directory. If the MCP client starts the server, make sure the working directory is set correctly or use absolute paths.
 - **Other Issues:** If you encounter any other problems, feel free to open an issue in [this server repo](https://github.com/kfastov/telegram-mcp-server).
 

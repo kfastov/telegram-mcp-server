@@ -1,12 +1,9 @@
 import dotenv from 'dotenv';
 import TelegramClient from './telegram-client.js';
 
-// Load environment variables from .env file
 dotenv.config();
 
-// Example usage of the TelegramClient class
 async function main() {
-  // Create a new TelegramClient instance
   const client = new TelegramClient(
     process.env.TELEGRAM_API_ID,
     process.env.TELEGRAM_API_HASH,
@@ -14,71 +11,31 @@ async function main() {
     './data/session.json'
   );
 
-  // Log in to Telegram
-  const loggedIn = await client.login();
-  if (!loggedIn) {
-    console.error('Failed to log in. Exiting...');
+  await client.initializeDialogCache();
+
+  console.log('Available chats:');
+  let index = 1;
+  for (const chat of client.dialogCache.values()) {
+    if (chat.title) {
+      console.log(`${index}. ${chat.title} (ID: ${chat.id})`);
+      index += 1;
+    }
+  }
+
+  const firstChat = client.dialogCache.values().next().value;
+  if (!firstChat) {
+    console.log('No chats available.');
     return;
   }
 
-  try {
-    // Get all dialogs (chats)
-    const dialogsResult = await client.getDialogs(100, 0);
-    console.log(`Found ${dialogsResult.chats.length} chats`);
-
-    // Example: Find a specific chat by title
-    const findChatByTitle = (title) => {
-      const chat = dialogsResult.chats.find(chat => 
-        chat.title && chat.title.includes(title)
-      );
-      
-      if (chat) {
-        console.log(`Found chat "${chat.title}" (ID: ${chat.id})`);
-      } else {
-        console.log(`No chat found with "${title}" in the title.`);
-      }
-      
-      return chat;
-    };
-
-    // Example: Get messages from a specific chat
-    const getMessagesFromChat = async (chatTitle) => {
-      const chat = findChatByTitle(chatTitle);
-      if (!chat) return [];
-
-      const messages = await client.getChatMessages(chat, 100);
-      console.log(`Retrieved ${messages.length} messages from "${chat.title}"`);
-      return messages;
-    };
-
-    // Example: Filter messages by a pattern (e.g., UUIDs)
-    const filterMessagesWithUUIDs = async (chatTitle) => {
-      const messages = await getMessagesFromChat(chatTitle);
-      
-      // UUID regex pattern
-      const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-      const filteredMessages = client.filterMessagesByPattern(messages, uuidPattern);
-      
-      console.log(`Found ${filteredMessages.length} messages containing UUIDs`);
-      return filteredMessages;
-    };
-
-    // Example usage: Replace 'YOUR_CHAT_NAME' with the chat you want to search
-    // const uuidMessages = await filterMessagesWithUUIDs('YOUR_CHAT_NAME');
-    // console.log('Messages with UUIDs:', uuidMessages);
-
-    // List all chats
-    console.log('Available chats:');
-    dialogsResult.chats.forEach((chat, index) => {
-      if (chat.title) {
-        console.log(`${index + 1}. ${chat.title} (ID: ${chat.id})`);
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in client application:', error);
-  }
+  const sampleMessages = await client.getMessagesByChannelId(firstChat.id, 10);
+  console.log(`\nLatest messages from "${firstChat.title}":`);
+  sampleMessages.forEach(msg => {
+    const date = msg.date ? new Date(msg.date * 1000).toISOString() : 'unknown-date';
+    console.log(`[${date}] ${msg.text || msg.message || ''}`);
+  });
 }
 
-// Run the main function
-main().catch(console.error); 
+main().catch(error => {
+  console.error('Error in client example:', error);
+});

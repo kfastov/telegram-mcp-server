@@ -129,3 +129,6 @@ dist
 # Custom ignores
 data/
 .private 
+# Local caches
+.npm-cache/
+.private_/
