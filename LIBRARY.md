@@ -6,8 +6,8 @@ This library (`telegram-client.js`) enables programmatic interaction with Telegr
 
 - Authentication with Telegram (including 2FA support)
 - Session management (automatic reuse of existing sessions)
-- Retrieving chats/dialogs (with caching)
-- Fetching messages from specific chats (using cached IDs)
+- Retrieving chats/dialogs on demand
+- Fetching messages from specific chats
 - Filtering messages by pattern (e.g., regex)
 
 ## Usage
@@ -30,18 +30,14 @@ async function main() {
 
   await client.initializeDialogCache();
 
-  // Get dialogs discovered during initialization
-  const dialogs = Array.from(client.dialogCache.values());
+  const dialogs = await client.listDialogs(20);
 
-  // Print all cached chats
   dialogs.forEach((chat) => {
-    if (chat.title) {
-      console.log(`Chat: ${chat.title} (ID: ${chat.id})`);
-    }
+    console.log(`Chat: ${chat.title} (ID: ${chat.id})`);
   });
 
-  // Example: Get messages (replace 'your_channel_id' with an actual ID from the cache)
-  // const messages = await client.getMessagesByChannelId('your_channel_id', 50);
+  // Example: Get messages (replace 'your_channel_id' with an actual ID)
+  // const { messages } = await client.getMessagesByChannelId('your_channel_id', 50);
   // console.log(messages);
 }
 
@@ -72,7 +68,9 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 #### Methods
 
 - `login()`: Authenticates with Telegram (handles new logins, 2FA, and session reuse).
-- `initializeDialogCache()`: Ensures authentication and refreshes the in-memory dialog list from Telegram.
+- `initializeDialogCache()`: Ensures authentication with Telegram.
+- `listDialogs(limit?)`: Returns the first `limit` dialogs as simple metadata objects.
+- `searchDialogs(keyword, limit?)`: Searches dialogs by title or username.
 - `ensureLogin()`: Throws if the client is not currently authorized.
-- `getMessagesByChannelId(channelId, limit)`: Returns recent messages for the cached chat/channel.
+- `getMessagesByChannelId(channelId, limit)`: Returns `{ peerTitle, peerId, peerType, messages }` for the requested chat/channel.
 - `filterMessagesByPattern(messages, pattern)`: Filters an array of message _strings_ by a regex pattern.

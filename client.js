@@ -13,24 +13,22 @@ async function main() {
 
   await client.initializeDialogCache();
 
-  console.log('Available chats:');
-  let index = 1;
-  for (const chat of client.dialogCache.values()) {
-    if (chat.title) {
-      console.log(`${index}. ${chat.title} (ID: ${chat.id})`);
-      index += 1;
-    }
-  }
+  const dialogs = await client.listDialogs(50);
 
-  const firstChat = client.dialogCache.values().next().value;
+  console.log('Available chats:');
+  dialogs.forEach((chat, index) => {
+    console.log(`${index + 1}. ${chat.title} (ID: ${chat.id})`);
+  });
+
+  const firstChat = dialogs[0];
   if (!firstChat) {
     console.log('No chats available.');
     return;
   }
 
-  const sampleMessages = await client.getMessagesByChannelId(firstChat.id, 10);
-  console.log(`\nLatest messages from "${firstChat.title}":`);
-  sampleMessages.forEach(msg => {
+  const { peerTitle, messages } = await client.getMessagesByChannelId(firstChat.id, 10);
+  console.log(`\nLatest messages from "${peerTitle}":`);
+  messages.forEach(msg => {
     const date = msg.date ? new Date(msg.date * 1000).toISOString() : 'unknown-date';
     console.log(`[${date}] ${msg.text || msg.message || ''}`);
   });

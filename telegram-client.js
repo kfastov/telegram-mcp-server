@@ -4,32 +4,26 @@ import path from 'path';
 import fs from 'fs';
 
 function sanitizeString(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-  return value;
+  return typeof value === 'string' ? value : '';
 }
 
 function coerceApiId(value) {
   if (typeof value === 'number') {
     return value;
   }
-
   if (typeof value === 'string') {
     const parsed = parseInt(value, 10);
     if (!Number.isNaN(parsed)) {
       return parsed;
     }
   }
-
   throw new Error('TELEGRAM_API_ID must be a number');
 }
 
 function normalizePeerType(peer) {
   if (!peer) return 'chat';
-  const type = peer.type;
-  if (type === 'user' || type === 'bot') return 'user';
-  if (type === 'channel') return 'channel';
+  if (peer.type === 'user' || peer.type === 'bot') return 'user';
+  if (peer.type === 'channel') return 'channel';
   return 'chat';
 }
 
@@ -40,9 +34,9 @@ class TelegramClient {
     this.phoneNumber = sanitizeString(phoneNumber);
     this.sessionPath = path.resolve(sessionPath);
 
-    const sessionDir = path.dirname(this.sessionPath);
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true });
+    const dataDir = path.dirname(this.sessionPath);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
 
     this.client = new MtCuteClient({
@@ -50,8 +44,6 @@ class TelegramClient {
       apiHash: this.apiHash,
       storage: this.sessionPath,
     });
-
-    this.dialogCache = new Map();
   }
 
   _isUnauthorizedError(error) {
@@ -60,7 +52,6 @@ class TelegramClient {
     if (code === 401) {
       return true;
     }
-
     const message = (error.errorMessage || error.message || '').toUpperCase();
     return message.includes('AUTH_KEY') || message.includes('AUTHORIZATION') || message.includes('SESSION_PASSWORD_NEEDED');
   }
@@ -120,96 +111,128 @@ class TelegramClient {
   }
 
   async ensureLogin() {
-    const authorized = await this._isAuthorized();
-    if (!authorized) {
+    if (!(await this._isAuthorized())) {
       throw new Error('Not logged in to Telegram. Please restart the server.');
     }
     return true;
   }
 
   async initializeDialogCache() {
-    console.log('Initializing dialog cache...');
+    console.log('Initializing dialog list...');
     const loginSuccess = await this.login();
     if (!loginSuccess) {
       throw new Error('Failed to login to Telegram. Cannot proceed.');
     }
-
-    await this._refreshDialogCache();
-
-    console.log(`Dialog cache initialized with ${this.dialogCache.size} entries`);
+    console.log('Dialogs ready.');
     return true;
   }
 
-  async _refreshDialogCache(limit = 0) {
-    this.dialogCache.clear();
-    let processed = 0;
+  async listDialogs(limit = 50) {
+    await this.ensureLogin();
+    const effectiveLimit = limit && limit > 0 ? limit : Infinity;
+    const results = [];
 
-    for await (const dialog of this.client.iterDialogs({})) {
+    for await (const dialog of this.client.iterDialogs({ limit: effectiveLimit === Infinity ? undefined : effectiveLimit })) {
       const peer = dialog.peer;
-      if (!peer) {
-        continue;
-      }
+      if (!peer) continue;
 
       const id = peer.id.toString();
-      const title = peer.displayName || 'Unknown';
       const username = 'username' in peer ? peer.username ?? null : null;
-
-      this.dialogCache.set(id, {
+      results.push({
         id,
         type: normalizePeerType(peer),
-        title,
+        title: peer.displayName || 'Unknown',
         username,
         access_hash: 'N/A',
       });
 
-      processed += 1;
-      if (limit > 0 && processed >= limit) {
+      if (results.length >= effectiveLimit) {
         break;
       }
     }
 
-    console.log(`Loaded ${this.dialogCache.size} dialogs into cache`);
-    return this.dialogCache.size;
+    return results;
   }
 
-  _getCachedChat(channelId) {
-    const cacheKey = String(channelId);
-    const cachedChat = this.dialogCache.get(cacheKey);
-    if (!cachedChat) {
-      throw new Error(`Channel with ID ${channelId} not found in cache.`);
+  async searchDialogs(keyword, limit = 100) {
+    const query = sanitizeString(keyword).trim().toLowerCase();
+    if (!query) {
+      return [];
     }
-    return cachedChat;
+
+    await this.ensureLogin();
+    const results = [];
+
+    for await (const dialog of this.client.iterDialogs({})) {
+      const peer = dialog.peer;
+      if (!peer) continue;
+
+      const title = (peer.displayName || '').toLowerCase();
+      const username = ('username' in peer && peer.username ? peer.username : '').toLowerCase();
+
+      if (title.includes(query) || username.includes(query)) {
+        results.push({
+          id: peer.id.toString(),
+          type: normalizePeerType(peer),
+          title: peer.displayName || 'Unknown',
+          username: 'username' in peer ? peer.username ?? null : null,
+          access_hash: 'N/A',
+        });
+      }
+
+      if (results.length >= limit) {
+        break;
+      }
+    }
+
+    return results;
+  }
+
+  _normalizePeerRef(channelId) {
+    if (typeof channelId === 'number') {
+      return channelId;
+    }
+    if (typeof channelId === 'bigint') {
+      return Number(channelId);
+    }
+    if (typeof channelId === 'string') {
+      const trimmed = channelId.trim();
+      if (/^-?\d+$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        if (!Number.isNaN(numeric)) {
+          return numeric;
+        }
+      }
+      return trimmed;
+    }
+    throw new Error('Invalid channel ID provided');
   }
 
   async getMessagesByChannelId(channelId, limit = 100) {
-    let cachedChat = this.dialogCache.get(String(channelId));
-    if (!cachedChat) {
-      await this._refreshDialogCache();
-      cachedChat = this.dialogCache.get(String(channelId));
-      if (!cachedChat) {
-        throw new Error(`Channel with ID ${channelId} not found in cache.`);
-      }
-    }
-    let peerRef = cachedChat.username || cachedChat.id;
-    const numericId = Number(cachedChat.id);
-    if (!cachedChat.username && !Number.isNaN(numericId)) {
-      peerRef = numericId;
-    }
+    await this.ensureLogin();
 
+    const peerRef = this._normalizePeerRef(channelId);
     const peer = await this.client.resolvePeer(peerRef);
 
+    const effectiveLimit = limit && limit > 0 ? limit : 100;
     const messages = [];
-    for await (const message of this.client.iterHistory(peer, { limit })) {
-      messages.push(this._serializeMessage(message, cachedChat));
-      if (messages.length >= limit) {
+
+    for await (const message of this.client.iterHistory(peer, { limit: effectiveLimit })) {
+      messages.push(this._serializeMessage(message, peer));
+      if (messages.length >= effectiveLimit) {
         break;
       }
     }
 
-    return messages;
+    return {
+      peerTitle: peer?.displayName || 'Unknown',
+      peerId: peer?.id?.toString?.() ?? String(channelId),
+      peerType: normalizePeerType(peer),
+      messages,
+    };
   }
 
-  _serializeMessage(message, cachedChat) {
+  _serializeMessage(message, peer) {
     const id = typeof message.id === 'number' ? message.id : Number(message.id || 0);
     let dateSeconds = null;
     if (message.date instanceof Date) {
@@ -236,8 +259,8 @@ class TelegramClient {
       message: textContent,
       text: textContent,
       from_id: senderId,
-      peer_type: cachedChat.type,
-      peer_id: cachedChat.id,
+      peer_type: normalizePeerType(peer),
+      peer_id: peer?.id?.toString?.() ?? 'unknown',
     };
   }
 

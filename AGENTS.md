@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `mcp-server.js`: FastMCP entry point exposing Telegram tools.
-- `telegram-client.js`: Domain logic for MTProto login, dialog cache, and message helpers.
+- `telegram-client.js`: Domain logic for MTProto login, dialog traversal, and message helpers.
 - `client.js`: Example CLI harness for manual testing without the MCP layer.
 - `data/`: Runtime artifacts (SQLite session storage); keep out of version control but ensure the directory exists locally.
 - Documentation lives in `README.md` and `LIBRARY.md`; configuration relies on a local `.env` file.
@@ -17,11 +17,11 @@
 ## Coding Style & Naming Conventions
 - Use ES modules with semicolons, two-space indentation, and `camelCase` identifiers.
 - Keep FastMCP tool names descriptive and aligned with Telegram operations (`listChannels`, `searchChannels`, etc.).
-- Emit log lines that explain side effects (cache refreshes, MTProto calls) and reference chat IDs/titles.
+- Emit log lines that explain side effects (login state, MTProto calls) and reference chat IDs/titles.
 - Store secrets in `.env`; never hard-code API credentials or session paths in commits.
 
 ## Testing Guidelines
-- Add coverage when extending `telegram-client.js` by mocking MTProto responses to validate session recovery and cache hydration.
+- Add coverage when extending `telegram-client.js` by mocking MTProto responses to validate session reuse and message retrieval.
 - Name new test files `<module>.test.js` under `tests/` or co-locate in `__tests__/`; make `npm test` execute them.
 - Before pushing, run your test suite and a smoke `npm start` to verify authentication prompts and cache initialization remain intact.
 
