@@ -4,30 +4,19 @@ An MCP server allowing AI assistants (like Claude) to interact with your Telegra
 
 ## Features
 
+- Enumerates Telegram dialogs available to the logged-in account.
+- Fetches recent messages for a chat/channel (supports regex filtering).
+- Schedules background sync jobs that incrementally archive messages into a local SQLite database (`data/messages.db`).
+
 ### Tools
 
-- `listChannels`
-
-  - Lists available Telegram channels/chats accessible by the account, based on the server's cache.
-  - Parameters:
-    - `limit` (number, optional): Maximum number of channels to return (default: 50).
-  - Output: A list of channels/chats with their ID, title, type, and access hash (if applicable).
-
-- `searchChannels`
-
-  - Searches the cached channels/chats by keywords in their names.
-  - Parameters:
-    - `keywords` (string): Keywords to search for in channel names.
-    - `limit` (number, optional): Maximum number of results to return (default: 100).
-  - Output: A list of matching channels/chats.
-
-- `getChannelMessages`
-  - Retrieves recent messages from a specific channel/chat using its ID.
-  - Parameters:
-    - `channelId` (number): The numeric ID of the channel/chat (obtained from `listChannels` or `searchChannels`).
-    - `limit` (number, optional): Maximum number of messages to return (default: 100).
-    - `filterPattern` (string, optional): A JavaScript-compatible regular expression to filter messages by their text content.
-  - Output: A list of messages containing ID, date, text, and sender ID.
+| Tool | Description |
+| --- | --- |
+| `listChannels` | Lists available Telegram channels/chats (limit configurable). |
+| `searchChannels` | Searches dialogs by title or username. |
+| `getChannelMessages` | Retrieves latest messages for a channel/chat (ID or username). |
+| `scheduleMessageSync` | Registers a background job that archives messages for a channel. |
+| `listMessageSyncJobs` | Shows sync jobs, cursors, and last run timestamps. |
 
 ## Prerequisites
 
@@ -106,7 +95,26 @@ There are two separate configurations that need to be set up:
 2.  **Normal Operation:**
     You'll need to start the server manually by running `npm start` in the project directory.
 
-    Once the server is running, your MCP client (e.g., Claude Desktop) will connect to it via the URL specified in its configuration (`http://localhost:8080/sse` by default).
+Once the server is running, your MCP client (e.g., Claude Desktop) will connect to it via the URL specified in its configuration (`http://localhost:8080/sse` by default).
+
+## Background Message Sync
+
+- Jobs and archived messages are stored in `data/messages.db` (SQLite).
+- The server processes sync jobs sequentially and waits between requests to avoid hitting Telegram rate limits.
+- Use the MCP tools to manage jobs:
+
+  ```
+  scheduleMessageSync { "channelId": -1001234567890 }
+  listMessageSyncJobs {}
+  ```
+
+  You can pass either the numeric chat ID or the public username as `channelId`. Jobs resume automatically when the server restarts.
+
+- Job statuses:
+  - `pending` — waiting to sync.
+  - `in_progress` — currently syncing (only one job runs at a time).
+  - `idle` — fully synced as of the last run.
+  - `error` — last run failed; reschedule the job to retry.
 
 ## Troubleshooting
 

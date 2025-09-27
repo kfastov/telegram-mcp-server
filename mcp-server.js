@@ -1,6 +1,7 @@
 import { FastMCP } from "fastmcp";
 import { z } from "zod";
 import TelegramClient from './telegram-client.js';
+import MessageSyncService from './message-sync-service.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -11,6 +12,13 @@ const telegramClient = new TelegramClient(
   process.env.TELEGRAM_PHONE_NUMBER,
   './data/session.json'
 );
+
+const messageSyncService = new MessageSyncService(telegramClient, {
+  dbPath: './data/messages.db',
+  batchSize: 100,
+  interJobDelayMs: 3000,
+  interBatchDelayMs: 1200,
+});
 
 const server = new FastMCP({
   name: "My Server",
@@ -53,11 +61,11 @@ server.addTool({
 
 server.addTool({
   name: "getChannelMessages",
-  description: "Retrieves messages from a specific channel/chat by its ID.",
+  description: "Retrieves messages from a specific channel/chat by its ID or username.",
   parameters: z.object({
     channelId: z.union([
       z.number(),
-      z.string().describe("The numeric ID or username of the channel/chat to fetch messages from"),
+      z.string().describe("Numeric ID or username")
     ]),
     limit: z.number().optional().describe("Maximum number of messages to return (default: 100)"),
     filterPattern: z.string().optional().describe("Optional regex pattern to filter messages by content"),
@@ -100,10 +108,38 @@ server.addTool({
   },
 });
 
+server.addTool({
+  name: "scheduleMessageSync",
+  description: "Schedule a background sync job for a channel to archive its messages locally.",
+  parameters: z.object({
+    channelId: z.union([
+      z.number(),
+      z.string().describe("Numeric ID or username of the channel")
+    ]),
+  }),
+  execute: async (args) => {
+    await telegramClient.ensureLogin();
+    const job = messageSyncService.addJob(args.channelId);
+    void messageSyncService.processQueue();
+    return `Scheduled sync job for channel ${job.channel_id}. Current status: ${job.status}`;
+  },
+});
+
+server.addTool({
+  name: "listMessageSyncJobs",
+  description: "Lists all message sync jobs and their statuses.",
+  parameters: z.object({}).optional(),
+  execute: async () => {
+    const jobs = messageSyncService.listJobs();
+    return `Tracked ${jobs.length} job(s).\n${JSON.stringify(jobs, null, 2)}`;
+  },
+});
+
 console.log('Starting server and initializing Telegram dialogs...');
 telegramClient.initializeDialogCache().then(success => {
   if (success) {
     console.log('Dialog initialization complete, starting server...');
+    messageSyncService.resumePendingJobs();
     server.start({
       transportType: "sse",
       sse: { endpoint: "/sse", port: 8080 },

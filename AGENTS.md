@@ -4,7 +4,8 @@
 - `mcp-server.js`: FastMCP entry point exposing Telegram tools.
 - `telegram-client.js`: Domain logic for MTProto login, dialog traversal, and message helpers.
 - `client.js`: Example CLI harness for manual testing without the MCP layer.
-- `data/`: Runtime artifacts (SQLite session storage); keep out of version control but ensure the directory exists locally.
+- `message-sync-service.js`: Background worker that archives messages into a local SQLite database.
+- `data/`: Runtime artifacts (SQLite session storage and message archive); keep out of version control but ensure the directory exists locally.
 - Documentation lives in `README.md` and `LIBRARY.md`; configuration relies on a local `.env` file.
 
 ## Build, Test, and Development Commands
@@ -17,11 +18,12 @@
 ## Coding Style & Naming Conventions
 - Use ES modules with semicolons, two-space indentation, and `camelCase` identifiers.
 - Keep FastMCP tool names descriptive and aligned with Telegram operations (`listChannels`, `searchChannels`, etc.).
-- Emit log lines that explain side effects (login state, MTProto calls) and reference chat IDs/titles.
+- Emit log lines that explain side effects (login state, MTProto calls, sync progress) and reference chat IDs/titles.
+- Keep message sync queue strictly sequential; jobs transition through `pending → in_progress → idle` and may move to `error` if retries are needed.
 - Store secrets in `.env`; never hard-code API credentials or session paths in commits.
 
 ## Testing Guidelines
-- Add coverage when extending `telegram-client.js` by mocking MTProto responses to validate session reuse and message retrieval.
+- Add coverage when extending `telegram-client.js` or `message-sync-service.js` by mocking MTProto responses to validate session reuse and message archiving.
 - Name new test files `<module>.test.js` under `tests/` or co-locate in `__tests__/`; make `npm test` execute them.
 - Before pushing, run your test suite and a smoke `npm start` to verify authentication prompts and cache initialization remain intact.
 

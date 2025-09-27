@@ -27,6 +27,26 @@ function normalizePeerType(peer) {
   return 'chat';
 }
 
+export function normalizeChannelId(channelId) {
+  if (typeof channelId === 'number') {
+    return channelId;
+  }
+  if (typeof channelId === 'bigint') {
+    return Number(channelId);
+  }
+  if (typeof channelId === 'string') {
+    const trimmed = channelId.trim();
+    if (/^-?\d+$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      if (!Number.isNaN(numeric)) {
+        return numeric;
+      }
+    }
+    return trimmed;
+  }
+  throw new Error('Invalid channel ID provided');
+}
+
 class TelegramClient {
   constructor(apiId, apiHash, phoneNumber, sessionPath = './data/session.json') {
     this.apiId = coerceApiId(apiId);
@@ -132,7 +152,7 @@ class TelegramClient {
     const effectiveLimit = limit && limit > 0 ? limit : Infinity;
     const results = [];
 
-    for await (const dialog of this.client.iterDialogs({ limit: effectiveLimit === Infinity ? undefined : effectiveLimit })) {
+    for await (const dialog of this.client.iterDialogs({})) {
       const peer = dialog.peer;
       if (!peer) continue;
 
@@ -143,7 +163,6 @@ class TelegramClient {
         type: normalizePeerType(peer),
         title: peer.displayName || 'Unknown',
         username,
-        access_hash: 'N/A',
       });
 
       if (results.length >= effectiveLimit) {
@@ -176,7 +195,6 @@ class TelegramClient {
           type: normalizePeerType(peer),
           title: peer.displayName || 'Unknown',
           username: 'username' in peer ? peer.username ?? null : null,
-          access_hash: 'N/A',
         });
       }
 
@@ -188,36 +206,17 @@ class TelegramClient {
     return results;
   }
 
-  _normalizePeerRef(channelId) {
-    if (typeof channelId === 'number') {
-      return channelId;
-    }
-    if (typeof channelId === 'bigint') {
-      return Number(channelId);
-    }
-    if (typeof channelId === 'string') {
-      const trimmed = channelId.trim();
-      if (/^-?\d+$/.test(trimmed)) {
-        const numeric = Number(trimmed);
-        if (!Number.isNaN(numeric)) {
-          return numeric;
-        }
-      }
-      return trimmed;
-    }
-    throw new Error('Invalid channel ID provided');
-  }
-
-  async getMessagesByChannelId(channelId, limit = 100) {
+  async getMessagesByChannelId(channelId, limit = 100, options = {}) {
     await this.ensureLogin();
 
-    const peerRef = this._normalizePeerRef(channelId);
+    const { minId = 0 } = options;
+    const peerRef = normalizeChannelId(channelId);
     const peer = await this.client.resolvePeer(peerRef);
 
     const effectiveLimit = limit && limit > 0 ? limit : 100;
     const messages = [];
 
-    for await (const message of this.client.iterHistory(peer, { limit: effectiveLimit })) {
+    for await (const message of this.client.iterHistory(peer, { limit: effectiveLimit, minId })) {
       messages.push(this._serializeMessage(message, peer));
       if (messages.length >= effectiveLimit) {
         break;
@@ -261,6 +260,7 @@ class TelegramClient {
       from_id: senderId,
       peer_type: normalizePeerType(peer),
       peer_id: peer?.id?.toString?.() ?? 'unknown',
+      raw: message.raw ?? null,
     };
   }
 
@@ -273,6 +273,10 @@ class TelegramClient {
     return messages
       .map(msg => (typeof msg === 'string' ? msg : msg.message || msg.text || ''))
       .filter(text => typeof text === 'string' && regex.test(text));
+  }
+
+  async destroy() {
+    await this.client.destroy();
   }
 }
 

@@ -74,3 +74,4 @@ const client = new TelegramClient(apiId, apiHash, phoneNumber, sessionPath);
 - `ensureLogin()`: Throws if the client is not currently authorized.
 - `getMessagesByChannelId(channelId, limit)`: Returns `{ peerTitle, peerId, peerType, messages }` for the requested chat/channel.
 - `filterMessagesByPattern(messages, pattern)`: Filters an array of message _strings_ by a regex pattern.
+- `destroy()`: Closes the underlying MTProto connection (useful for short-lived scripts).
