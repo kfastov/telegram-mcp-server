@@ -1,22 +1,16 @@
 # Telegram MCP Server
 
-An MCP server allowing AI assistants (like Claude) to interact with your Telegram account using the user client API (not the bot API). Built with `@mtproto/core` and the **FastMCP** framework.
+An MCP server allowing AI assistants (like Claude or Cursor) to interact with your Telegram account using the user client API (not the bot API). The stack rides on the official `@modelcontextprotocol/sdk` Streamable HTTP transport and exposes Telegram-oriented tools for listing dialogs, fetching messages, and managing background sync jobs.
 
-## Features
-
-- Enumerates Telegram dialogs available to the logged-in account.
-- Fetches recent messages for a chat/channel (supports regex filtering).
-- Schedules background sync jobs that incrementally archive messages into a local SQLite database (`data/messages.db`).
-
-### Tools
+## Tools
 
 | Tool | Description |
 | --- | --- |
-| `listChannels` | Lists available Telegram channels/chats (limit configurable). |
+| `listChannels` | Lists available dialogs/channels (limit configurable). |
 | `searchChannels` | Searches dialogs by title or username. |
-| `getChannelMessages` | Retrieves latest messages for a channel/chat (ID or username). |
-| `scheduleMessageSync` | Registers a background job that archives messages for a channel. |
-| `listMessageSyncJobs` | Shows sync jobs, cursors, and last run timestamps. |
+| `getChannelMessages` | Fetches recent messages (ID or username, optional regex filter). |
+| `scheduleMessageSync` | Schedules a background job to archive a dialog into SQLite. |
+| `listMessageSyncJobs` | Displays tracked sync jobs, cursors, and statuses. |
 
 ## Prerequisites
 
@@ -63,7 +57,7 @@ There are two separate configurations that need to be set up:
    {
      "mcpServers": {
        "telegram": {
-         "url": "http://localhost:8080/sse",
+       "url": "http://localhost:8080/mcp",
          "disabled": false,
          "timeout": 30
        }
@@ -80,22 +74,15 @@ There are two separate configurations that need to be set up:
 
 ## Running the Server
 
-1.  **Initial Login (Important First Step):**
-    The first time you run the server (or if your session expires/is invalid), it needs to authenticate with Telegram. Run it directly from your terminal:
+1.  Run the server:
 
     ```bash
     npm start
     ```
 
-    - The server will use the credentials from your `.env` file.
-    - It will prompt you in the terminal to enter the login code sent to your Telegram account and your 2FA password if required.
-    - Upon successful login, a session file (`./data/session.json`) will be created. This file allows the server to log in automatically in the future without requiring codes/passwords.
-    - The server will enumerate your chats after login. This can take some time on the first run, especially with many chats.
+    On the first run the server will authenticate via MTProto. Enter the login code from Telegram and (if enabled) your 2FA password. After a successful login a persistent session file is saved under `./data/session.json`, so restarts won't prompt again unless the session is revoked.
 
-2.  **Normal Operation:**
-    You'll need to start the server manually by running `npm start` in the project directory.
-
-Once the server is running, your MCP client (e.g., Claude Desktop) will connect to it via the URL specified in its configuration (`http://localhost:8080/sse` by default).
+2.  Point your MCP client at the same URL. Cursor/Claude will send the standard `initialize → notifications/initialized → tools/list` sequence, which the SDK transport handles automatically. Once connected you should see the Telegram toolset in the client UI.
 
 ## Background Message Sync
 
@@ -108,13 +95,7 @@ Once the server is running, your MCP client (e.g., Claude Desktop) will connect 
   listMessageSyncJobs {}
   ```
 
-  You can pass either the numeric chat ID or the public username as `channelId`. Jobs resume automatically when the server restarts.
-
-- Job statuses:
-  - `pending` — waiting to sync.
-  - `in_progress` — currently syncing (only one job runs at a time).
-  - `idle` — fully synced as of the last run.
-  - `error` — last run failed; reschedule the job to retry.
+  You can supply either the numeric chat ID or the public username as `channelId`. Jobs resume automatically when the server restarts. Job statuses transition through `pending → in_progress → idle`, moving to `error` if retries are required.
 
 ## Troubleshooting
 

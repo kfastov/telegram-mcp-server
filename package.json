@@ -2,7 +2,7 @@
   "name": "telegram-mcp-server",
   "version": "1.0.0",
   "type": "module",
-  "description": "MCP server for a Telegram client built with the MTProto library and FastMCP framework",
+  "description": "MCP server scaffold for Telegram workflows using the official Model Context Protocol SDK",
   "main": "mcp-server.js",
   "scripts": {
     "client": "node mcp-client.js",
@@ -45,7 +45,7 @@
     "@modelcontextprotocol/sdk": "^1.9.0",
     "@mtcute/core": "^0.26.1",
     "@mtcute/node": "^0.26.1",
-    "dotenv": "^16.5.0",
-    "fastmcp": "^1.21.0"
+    "better-sqlite3": "^9.6.0",
+    "dotenv": "^16.5.0"
   }
 }

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `mcp-server.js`: FastMCP entry point exposing Telegram tools.
+- `mcp-server.js`: MCP HTTP server built with `@modelcontextprotocol/sdk`, registering the Telegram tools (`listChannels`, `searchChannels`, `getChannelMessages`, `scheduleMessageSync`, `listMessageSyncJobs`).
 - `telegram-client.js`: Domain logic for MTProto login, dialog traversal, and message helpers.
 - `client.js`: Example CLI harness for manual testing without the MCP layer.
 - `message-sync-service.js`: Background worker that archives messages into a local SQLite database.
@@ -10,14 +10,14 @@
 
 ## Build, Test, and Development Commands
 - `npm install`: Restore dependencies whenever `package-lock.json` changes.
-- `npm start`: Boot the SSE server on `http://localhost:8080/sse`; first run will drive the Telegram login flow.
+- `npm start`: Boot the MCP server on `http://localhost:8080/mcp` using Streamable HTTP transport; first run drives the Telegram login flow.
 - `node client.js`: Run the sample script to exercise the client API and inspect dialog listings.
 - `npm run build`: Currently a no-op placeholder—extend it only if a transpile/bundle step is introduced.
 - `npm test`: Placeholder that echoes a notice; replace with real checks once tests exist.
 
 ## Coding Style & Naming Conventions
 - Use ES modules with semicolons, two-space indentation, and `camelCase` identifiers.
-- Keep FastMCP tool names descriptive and aligned with Telegram operations (`listChannels`, `searchChannels`, etc.).
+- Keep tool names descriptive and aligned with Telegram operations (`listChannels`, `searchChannels`, etc.).
 - Emit log lines that explain side effects (login state, MTProto calls, sync progress) and reference chat IDs/titles.
 - Keep message sync queue strictly sequential; jobs transition through `pending → in_progress → idle` and may move to `error` if retries are needed.
 - Store secrets in `.env`; never hard-code API credentials or session paths in commits.
