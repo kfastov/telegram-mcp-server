@@ -451,6 +451,12 @@ async function shutdown() {
   });
 
   try {
+    await messageSyncService.shutdown();
+  } catch (error) {
+    console.error(`[shutdown] error while stopping message sync: ${error?.message ?? error}`);
+  }
+
+  try {
     await telegramClient.destroy();
   } catch (error) {
     console.error(`[shutdown] error while closing Telegram client: ${error?.message ?? error}`);

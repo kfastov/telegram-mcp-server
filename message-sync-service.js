@@ -20,6 +20,7 @@ export default class MessageSyncService {
     this.interJobDelayMs = options.interJobDelayMs || 3000;
     this.interBatchDelayMs = options.interBatchDelayMs || 1000;
     this.processing = false;
+    this.stopRequested = false;
 
     this._initDatabase();
   }
@@ -101,9 +102,15 @@ export default class MessageSyncService {
     if (this.processing) {
       return;
     }
+    if (this.stopRequested) {
+      return;
+    }
     this.processing = true;
     try {
       while (true) {
+        if (this.stopRequested) {
+          break;
+        }
         const job = this._getNextJob();
         if (!job) {
           break;
@@ -118,6 +125,18 @@ export default class MessageSyncService {
 
   resumePendingJobs() {
     void this.processQueue();
+  }
+
+  async shutdown() {
+    this.stopRequested = true;
+
+    while (this.processing) {
+      await delay(100);
+    }
+
+    if (this.db && this.db.open) {
+      this.db.close();
+    }
   }
 
   _getNextJob() {
