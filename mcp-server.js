@@ -82,6 +82,13 @@ const scheduleMessageSyncSchema = {
       z.string({ invalid_type_error: "channelId must be a string" }).min(1),
     ])
     .describe("Numeric channel ID or username"),
+  depth: z
+    .number({ invalid_type_error: "depth must be a number" })
+    .int()
+    .positive()
+    .max(50000)
+    .optional()
+    .describe("Maximum messages to retain per channel (default 1000)"),
 };
 
 function createServerInstance() {
@@ -180,9 +187,9 @@ function createServerInstance() {
     "scheduleMessageSync",
     "Schedules a background job to archive channel messages locally.",
     scheduleMessageSyncSchema,
-    async ({ channelId }) => {
+    async ({ channelId, depth }) => {
       await telegramClient.ensureLogin();
-      const job = messageSyncService.addJob(channelId);
+      const job = messageSyncService.addJob(channelId, { depth });
       void messageSyncService.processQueue();
 
       return {

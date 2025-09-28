@@ -209,14 +209,32 @@ class TelegramClient {
   async getMessagesByChannelId(channelId, limit = 100, options = {}) {
     await this.ensureLogin();
 
-    const { minId = 0 } = options;
+    const {
+      minId = 0,
+      maxId = 0,
+      reverse = false,
+    } = options;
     const peerRef = normalizeChannelId(channelId);
     const peer = await this.client.resolvePeer(peerRef);
 
     const effectiveLimit = limit && limit > 0 ? limit : 100;
     const messages = [];
 
-    for await (const message of this.client.iterHistory(peer, { limit: effectiveLimit, minId })) {
+    const iterOptions = {
+      limit: effectiveLimit,
+      chunkSize: Math.min(effectiveLimit, 100),
+      reverse,
+    };
+
+    if (minId) {
+      iterOptions.minId = minId;
+    }
+
+    if (maxId) {
+      iterOptions.maxId = maxId;
+    }
+
+    for await (const message of this.client.iterHistory(peer, iterOptions)) {
       messages.push(this._serializeMessage(message, peer));
       if (messages.length >= effectiveLimit) {
         break;
