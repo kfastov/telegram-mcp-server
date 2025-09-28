@@ -1,4 +1,5 @@
 import { TelegramClient as MtCuteClient } from '@mtcute/node';
+import EventEmitter from 'events';
 import readline from 'readline';
 import path from 'path';
 import fs from 'fs';
@@ -64,6 +65,9 @@ class TelegramClient {
       apiHash: this.apiHash,
       storage: this.sessionPath,
     });
+
+    this.updateEmitter = new EventEmitter();
+    this.updatesRunning = false;
   }
 
   _isUnauthorizedError(error) {
@@ -143,6 +147,7 @@ class TelegramClient {
     if (!loginSuccess) {
       throw new Error('Failed to login to Telegram. Cannot proceed.');
     }
+    await this.startUpdates();
     console.log('Dialogs ready.');
     return true;
   }
@@ -294,7 +299,43 @@ class TelegramClient {
   }
 
   async destroy() {
+    if (this.updatesRunning && this.client?.updates?.stop) {
+      try {
+        await this.client.updates.stop();
+      } catch (error) {
+        console.warn('[warning] failed to stop updates loop:', error?.message || error);
+      }
+      this.updatesRunning = false;
+    }
     await this.client.destroy();
+  }
+
+  onUpdate(listener) {
+    this.updateEmitter.on('update', listener);
+    return () => this.updateEmitter.off('update', listener);
+  }
+
+  async startUpdates() {
+    if (this.updatesRunning) {
+      return;
+    }
+
+    if (!this.client?.updates?.start) {
+      return;
+    }
+
+    try {
+      await this.client.updates.start(async (update) => {
+        try {
+          this.updateEmitter.emit('update', update);
+        } catch (error) {
+          console.warn('[warning] update handler error:', error?.stack || error);
+        }
+      });
+      this.updatesRunning = true;
+    } catch (error) {
+      console.warn('[warning] failed to start updates loop:', error?.message || error);
+    }
   }
 }
 
