@@ -165,6 +165,64 @@ export default class MessageSyncService {
     `).get();
   }
 
+  searchMessages({ channelId, pattern, limit = 50, caseInsensitive = true }) {
+    const normalizedId = String(normalizeChannelId(channelId));
+    const flags = caseInsensitive ? "i" : "";
+    let regex;
+    try {
+      regex = new RegExp(pattern, flags);
+    } catch (error) {
+      throw new Error(`Invalid pattern: ${error.message}`);
+    }
+
+    const rows = this.db.prepare(`
+      SELECT message_id, date, from_id, text
+      FROM messages
+      WHERE channel_id = ?
+      ORDER BY message_id DESC
+    `).all(normalizedId);
+
+    const matches = [];
+    for (const row of rows) {
+      const text = row.text || "";
+      if (regex.test(text)) {
+        matches.push({
+          messageId: row.message_id,
+          date: row.date ? new Date(row.date * 1000).toISOString() : null,
+          fromId: row.from_id,
+          text,
+        });
+        if (matches.length >= limit) {
+          break;
+        }
+      }
+    }
+
+    return matches;
+  }
+
+  getMessageStats(channelId) {
+    const normalizedId = String(normalizeChannelId(channelId));
+    const summary = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        MIN(message_id) AS oldestMessageId,
+        MAX(message_id) AS newestMessageId,
+        MIN(date) AS oldestDate,
+        MAX(date) AS newestDate
+      FROM messages
+      WHERE channel_id = ?
+    `).get(normalizedId);
+
+    return {
+      total: summary.total || 0,
+      oldestMessageId: summary.oldestMessageId || null,
+      newestMessageId: summary.newestMessageId || null,
+      oldestDate: summary.oldestDate ? new Date(summary.oldestDate * 1000).toISOString() : null,
+      newestDate: summary.newestDate ? new Date(summary.newestDate * 1000).toISOString() : null,
+    };
+  }
+
   async _processJob(job) {
     this._updateJobStatus(job.id, JOB_STATUS.IN_PROGRESS);
 

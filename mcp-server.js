@@ -91,6 +91,30 @@ const scheduleMessageSyncSchema = {
     .describe("Maximum messages to retain per channel (default 1000)"),
 };
 
+const searchSyncedMessagesSchema = {
+  channelId: z
+    .union([
+      z.number({ invalid_type_error: "channelId must be a number" }),
+      z.string({ invalid_type_error: "channelId must be a string" }).min(1),
+    ])
+    .describe("Numeric channel ID or username"),
+  pattern: z
+    .string({ invalid_type_error: "pattern must be a string" })
+    .min(1)
+    .describe("Regular expression used to match message text"),
+  limit: z
+    .number({ invalid_type_error: "limit must be a number" })
+    .int()
+    .positive()
+    .max(200)
+    .optional()
+    .describe("Maximum number of matches to return (default 50)"),
+  caseInsensitive: z
+    .boolean({ invalid_type_error: "caseInsensitive must be a boolean" })
+    .optional()
+    .describe("Whether the pattern should be case-insensitive (default true)"),
+};
+
 function createServerInstance() {
   const server = new McpServer({
     name: "example-mcp-server",
@@ -197,6 +221,54 @@ function createServerInstance() {
           {
             type: "text",
             text: JSON.stringify(job, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "searchSyncedMessages",
+    "Searches stored messages for a channel using a regular expression.",
+    searchSyncedMessagesSchema,
+    async ({ channelId, pattern, limit, caseInsensitive }) => {
+      const results = messageSyncService.searchMessages({
+        channelId,
+        pattern,
+        limit,
+        caseInsensitive,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(results, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "getSyncedMessageStats",
+    "Returns summary statistics for stored messages in a channel.",
+    {
+      channelId: z
+        .union([
+          z.number({ invalid_type_error: "channelId must be a number" }),
+          z.string({ invalid_type_error: "channelId must be a string" }).min(1),
+        ])
+        .describe("Numeric channel ID or username"),
+    },
+    async ({ channelId }) => {
+      const stats = messageSyncService.getMessageStats(channelId);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(stats, null, 2),
           },
         ],
       };
