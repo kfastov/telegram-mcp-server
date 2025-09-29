@@ -1,5 +1,9 @@
 # Telegram MCP Server
 
+**Revival update (September 2025).** The server now runs on the official `@modelcontextprotocol/sdk` transport, backed by the MtCute Telegram client and a sequential background archive worker writing into SQLite.
+**Breaking changes.** MCP clients must target `http://localhost:8080/mcp`; message history now lives in `data/messages.db`, and new sync tools drive archival jobs. The legacy implementation remains published as branch `legacy-0.x` and tag `v0-legacy` if you need the old `/sse` flow.
+**Key changes:** `/mcp` endpoint, MtCute session handling, message-sync job queue, SQLite archive, new CLI helpers in `client.js`.
+
 An MCP server allowing AI assistants (like Claude or Cursor) to interact with your Telegram account using the user client API (not the bot API). The stack rides on the official `@modelcontextprotocol/sdk` Streamable HTTP transport and exposes Telegram-oriented tools for listing dialogs, fetching messages, and managing background sync jobs.
 
 ## Tools
