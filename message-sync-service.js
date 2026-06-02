@@ -1972,15 +1972,12 @@ export default class MessageSyncService {
     return { canceled: ids.length, jobIds: ids };
   }
 
-  // Compact job-count snapshot for the control API (`/control/ping`) and the
-  // server idle monitor. `inProgress` includes pending+in_progress because a
-  // pending job still represents queued work the server must stay up for.
+  // Compact `{ pending, inProgress }` snapshot for the control API
+  // (`/control/ping`) and the idle monitor. A trivial re-key of getQueueStats()
+  // that keeps callers (and their service stubs) off the snake_case queue shape.
   getJobCounts() {
-    const stats = this.getQueueStats();
-    return {
-      pending: stats.pending,
-      inProgress: stats.in_progress,
-    };
+    const { pending, in_progress: inProgress } = this.getQueueStats();
+    return { pending, inProgress };
   }
 
   // Number of channels with realtime watch enabled. Used by the idle monitor:

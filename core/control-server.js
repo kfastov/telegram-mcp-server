@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
+import { readJsonBody, sendJson } from './http-util.js';
+
 export const CONTROL_FILE = 'control.json';
 export const CONTROL_TOKEN_HEADER = 'x-tgcli-control-token';
 
@@ -49,27 +51,6 @@ export function isIdle({ jobCounts, watchedCount, lastActivityAt, now, idleExitM
     return false;
   }
   return now - lastActivityAt > idleExitMs;
-}
-
-function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req
-      .on('data', (chunk) => chunks.push(chunk))
-      .on('end', () => {
-        try {
-          const raw = Buffer.concat(chunks).toString('utf8');
-          resolve(raw.length ? JSON.parse(raw) : {});
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .on('error', (error) => reject(error));
-  });
-}
-
-function sendJson(res, status, payload) {
-  res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(payload));
 }
 
 /**

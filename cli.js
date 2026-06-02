@@ -21,6 +21,7 @@ import {
   SendCommandError,
 } from './core/send-utils.js';
 import { resolveStoreDir } from './core/store.js';
+import { parseDuration } from './core/duration.js';
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 const SERVICE_STATE_FILE = 'service-state.json';
@@ -698,24 +699,6 @@ function printArchiveFallbackNote(channelIds) {
     'Showing live results. To archive: tgcli channels watch --chat <id>; ' +
     'tgcli backfill --once (or --follow).';
   console.log(colorizeNote(message));
-}
-
-function parseDuration(value) {
-  if (typeof value !== 'string' || !value.trim()) {
-    return null;
-  }
-  const raw = value.trim();
-  const match = raw.match(/^(\d+)(ms|s|m|h)?$/i);
-  if (!match) {
-    throw new Error(`Invalid duration: ${value}`);
-  }
-  const amount = Number(match[1]);
-  const unit = (match[2] || 's').toLowerCase();
-  if (unit === 'ms') return amount;
-  if (unit === 's') return amount * 1000;
-  if (unit === 'm') return amount * 60 * 1000;
-  if (unit === 'h') return amount * 60 * 60 * 1000;
-  return amount * 1000;
 }
 
 // Resolve the effective timeout for a send command.

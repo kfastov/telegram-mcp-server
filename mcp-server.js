@@ -17,6 +17,8 @@ import {
   removeControlFile,
   isIdle,
 } from "./core/control-server.js";
+import { readJsonBody } from "./core/http-util.js";
+import { parseDuration } from "./core/duration.js";
 
 const SERVICE_STATE_FILE = "service-state.json";
 
@@ -43,9 +45,9 @@ const controlPortRaw = Number(controlConfig.port ?? 8765);
 const CONTROL_PORT = Number.isFinite(controlPortRaw) && controlPortRaw > 0 ? controlPortRaw : 8765;
 
 // Idle-exit window (ms). Plumbed from the CLI `server --idle-exit <duration>`
-// via argv (`--idle-exit <ms|duration>`) or the TGCLI_IDLE_EXIT env var. When
-// unset/zero the server stays up forever.
-const IDLE_EXIT_MS = parseIdleExitMs(readIdleExitArg());
+// via argv or the TGCLI_IDLE_EXIT env var. When unset/zero the server stays up
+// forever. See resolveIdleExitMs for the ms-vs-duration-string handling.
+const IDLE_EXIT_MS = resolveIdleExitMs(readIdleExitArg());
 const IDLE_CHECK_INTERVAL_MS = 5000;
 
 const { telegramClient, messageSyncService } = createServices({ storeDir, config });
@@ -70,24 +72,27 @@ function readIdleExitArg() {
   return process.env.TGCLI_IDLE_EXIT ?? null;
 }
 
-// Accepts a plain millisecond number or a duration string (e.g. "60s", "5m").
-// Mirrors the CLI parseDuration units so either form works over argv/env.
-function parseIdleExitMs(value) {
+// Resolve the idle-exit window to milliseconds. The CLI forwards `--idle-exit`
+// as a plain integer of milliseconds (it has already parsed the user's duration
+// via parseDuration), so a bare integer here is treated AS-IS as ms. A value
+// carrying a unit suffix (e.g. "60s", "5m" from TGCLI_IDLE_EXIT) is parsed with
+// the shared parseDuration (where a bare number would mean seconds, but that
+// branch never applies here because bare integers are short-circuited above).
+// This explicit split avoids the previous accidental divergence where the same
+// bare number meant seconds in the CLI but milliseconds in the server.
+function resolveIdleExitMs(value) {
   if (value === null || value === undefined || value === "") {
     return 0;
   }
   const raw = String(value).trim();
-  const match = raw.match(/^(\d+)(ms|s|m|h)?$/i);
-  if (!match) {
+  if (/^\d+$/.test(raw)) {
+    return Number(raw);
+  }
+  try {
+    return parseDuration(raw) ?? 0;
+  } catch (error) {
     return 0;
   }
-  const amount = Number(match[1]);
-  const unit = (match[2] || "ms").toLowerCase();
-  if (unit === "ms") return amount;
-  if (unit === "s") return amount * 1000;
-  if (unit === "m") return amount * 60 * 1000;
-  if (unit === "h") return amount * 60 * 60 * 1000;
-  return amount;
 }
 
 function readVersion() {
@@ -1871,25 +1876,8 @@ async function ensureSession(req, res, body) {
   return record;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req
-      .on("data", (chunk) => chunks.push(chunk))
-      .on("end", () => {
-        try {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          resolve(raw.length ? JSON.parse(raw) : {});
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .on("error", (error) => reject(error));
-  });
-}
-
 async function handlePost(req, res) {
-  const body = await readBody(req);
+  const body = await readJsonBody(req);
   const sessionRecord = await ensureSession(req, res, body);
   if (!sessionRecord) {
     return;
