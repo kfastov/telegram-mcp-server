@@ -84,3 +84,4 @@ tgcli channels list --limit 10 --json
 
 - Use `--source live|archive|both` when listing or searching messages.
 - `--json` is best for AI/tooling pipelines.
+- `send` commands time out after `30s` by default so they never hang on a stuck connection. Override with `--timeout 5m` or disable with `--timeout 0`. Long-running commands (`sync`, `--follow`, `server`) are unbounded by default.

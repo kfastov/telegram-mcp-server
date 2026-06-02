@@ -39,6 +39,11 @@ const CONFIG_SPECS = [
 
 const SEND_PARSE_MODES = ['markdown', 'html', 'none'];
 const DEFAULT_SEND_RETRIES = 2;
+// Send commands target AI agents and scripts that must not block forever on a
+// hung MTProto connection, so they get a bounded default timeout. Other commands
+// (sync, --follow, server, ...) legitimately run for minutes/hours and stay
+// unbounded unless an explicit --timeout is passed.
+const DEFAULT_SEND_TIMEOUT_MS = 30000;
 const FEEDBACK_LAST_FILE = 'feedback-last.json';
 const FEEDBACK_COOLDOWN_MS = 60 * 1000;
 const FEEDBACK_DEFAULT_CHAT_ID = '@kfastov';
@@ -53,6 +58,7 @@ function buildProgram() {
     .usage('[options] <command>')
     .option('--json', 'Machine-readable output')
     .option('--timeout <duration>', 'Wall-clock timeout (e.g. 30s, 5m)')
+    .option('--quiet', 'Suppress progress/status output on stderr')
     .version(readVersion(), '--version', 'Print version and exit')
     .showHelpAfterError(true);
 
@@ -589,6 +595,7 @@ function getGlobalFlags(command) {
   const timeoutMs = options.timeout ? parseDuration(options.timeout) : null;
   return {
     json: Boolean(options.json),
+    quiet: Boolean(options.quiet),
     timeout: options.timeout ?? null,
     timeoutMs,
   };
@@ -679,6 +686,28 @@ function parseDuration(value) {
   if (unit === 'm') return amount * 60 * 1000;
   if (unit === 'h') return amount * 60 * 60 * 1000;
   return amount * 1000;
+}
+
+// Resolve the effective timeout for a send command.
+//   null/undefined (no --timeout)  -> default 30s
+//   0 (--timeout 0)                -> 0, meaning disabled/unbounded
+//   any positive value             -> honored as given
+function resolveSendTimeoutMs(timeoutMs) {
+  return timeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
+}
+
+function formatTimeoutDuration(timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return `${timeoutMs}ms`;
+  }
+  return timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}s` : `${timeoutMs}ms`;
+}
+
+// Clear, actionable message used when a send exceeds its timeout budget, so the
+// failure reads as a real timeout rather than a generic empty error.
+function formatSendTimeoutMessage(timeoutMs) {
+  return `Send timed out after ${formatTimeoutDuration(timeoutMs)} (no response from Telegram). `
+    + 'Pass --timeout <duration> to extend, or --timeout 0 to disable.';
 }
 
 function resolveConfigSpec(key) {
@@ -1021,7 +1050,7 @@ function resolveServiceManager() {
   return { manager: 'unsupported', brewInfo };
 }
 
-function runWithTimeout(task, timeoutMs, onTimeout) {
+function runWithTimeout(task, timeoutMs, onTimeout, timeoutMessage = 'Timeout') {
   if (!timeoutMs) {
     return task();
   }
@@ -1033,7 +1062,7 @@ function runWithTimeout(task, timeoutMs, onTimeout) {
           await onTimeout();
         }
       } finally {
-        reject(new Error('Timeout'));
+        reject(new Error(timeoutMessage));
       }
     }, timeoutMs);
   });
@@ -3032,6 +3061,16 @@ function normalizeSendCommandError(error, { method, retries, attempt = 1 } = {})
   return new SendCommandError(classifySendError(error, { method, retries, attempt }));
 }
 
+// Brief progress note on stderr so users/agents see the command is alive while
+// the MTProto connection is established. stderr keeps stdout --json output clean.
+// Suppressed by the global --quiet flag.
+function printSendStatus(message, globalFlags) {
+  if (globalFlags?.quiet) {
+    return;
+  }
+  process.stderr.write(`${message}\n`);
+}
+
 function logSendRetry(details, globalFlags) {
   if (globalFlags.json) {
     process.stderr.write(`${JSON.stringify({ event: 'retry', type: details.type, method: details.method, message: details.message, attempt: details.attempt, retries: details.retries })}\n`);
@@ -3058,7 +3097,7 @@ function buildSendPhotoSuccessPayload({ method, inputChatId, result, attempts })
 
 async function runSendText(globalFlags, options = {}) {
   resolveSendAliases(options);
-  const timeoutMs = globalFlags.timeoutMs;
+  const timeoutMs = resolveSendTimeoutMs(globalFlags.timeoutMs);
   const method = 'sendText';
   let retries = DEFAULT_SEND_RETRIES;
 
@@ -3071,6 +3110,7 @@ async function runSendText(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {
@@ -3093,6 +3133,7 @@ async function runSendText(globalFlags, options = {}) {
             method,
             retries,
             retryBackoff,
+            timeoutMs,
             sleep: (ms) => delay(ms),
           },
         );
@@ -3110,7 +3151,7 @@ async function runSendText(globalFlags, options = {}) {
         await telegramClient.destroy();
         release();
       }
-    }, timeoutMs);
+    }, timeoutMs, undefined, formatSendTimeoutMessage(timeoutMs));
   } catch (error) {
     throw normalizeSendCommandError(error, { method, retries });
   }
@@ -3118,7 +3159,7 @@ async function runSendText(globalFlags, options = {}) {
 
 async function runSendPhoto(globalFlags, options = {}) {
   resolveSendAliases(options);
-  const timeoutMs = globalFlags.timeoutMs;
+  const timeoutMs = resolveSendTimeoutMs(globalFlags.timeoutMs);
   const method = 'sendPhoto';
   let retries = DEFAULT_SEND_RETRIES;
 
@@ -3134,6 +3175,7 @@ async function runSendPhoto(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {
@@ -3175,7 +3217,7 @@ async function runSendPhoto(globalFlags, options = {}) {
         await telegramClient.destroy();
         release();
       }
-    }, timeoutMs);
+    }, timeoutMs, undefined, formatSendTimeoutMessage(timeoutMs));
   } catch (error) {
     throw normalizeSendCommandError(error, { method, retries });
   }
@@ -3183,7 +3225,7 @@ async function runSendPhoto(globalFlags, options = {}) {
 
 async function runSendFile(globalFlags, options = {}) {
   resolveSendAliases(options);
-  const timeoutMs = globalFlags.timeoutMs;
+  const timeoutMs = resolveSendTimeoutMs(globalFlags.timeoutMs);
   const method = 'sendFile';
   let retries = DEFAULT_SEND_RETRIES;
 
@@ -3199,6 +3241,7 @@ async function runSendFile(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {
@@ -3225,6 +3268,7 @@ async function runSendFile(globalFlags, options = {}) {
             method,
             retries,
             retryBackoff,
+            timeoutMs,
             sleep: (ms) => delay(ms),
           },
         );
@@ -3242,7 +3286,7 @@ async function runSendFile(globalFlags, options = {}) {
         await telegramClient.destroy();
         release();
       }
-    }, timeoutMs);
+    }, timeoutMs, undefined, formatSendTimeoutMessage(timeoutMs));
   } catch (error) {
     throw normalizeSendCommandError(error, { method, retries });
   }
@@ -4360,13 +4404,16 @@ async function main() {
 export {
   buildProgram,
   buildSendPhotoSuccessPayload,
+  DEFAULT_SEND_TIMEOUT_MS,
   formatFeedbackMessage,
+  formatSendTimeoutMessage,
   getFeedbackCooldownRemainingSeconds,
   isCliEntrypoint,
   logSendRetry,
   main,
   normalizeSendCommandError,
   parseNonNegativeInt,
+  resolveSendTimeoutMs,
   runFeedback,
   shouldRunMain,
   writeError,
