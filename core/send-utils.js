@@ -102,6 +102,19 @@ export function parseRequiredWaitSeconds(error) {
   return null;
 }
 
+/**
+ * Build a clear message for a FLOOD_WAIT that exceeds the send timeout budget,
+ * so the failure reads as a rate limit rather than a generic timeout/hang.
+ */
+export function formatRateLimitTimeoutMessage(waitSeconds, timeoutMs) {
+  const timeoutSeconds = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.round(timeoutMs / 1000)
+    : null;
+  const budget = timeoutSeconds !== null ? `the ${timeoutSeconds}s timeout` : 'the timeout';
+  return `Telegram rate-limited this send (FLOOD_WAIT ${waitSeconds}s), which exceeds ${budget}. `
+    + 'Retry later or pass --timeout 0.';
+}
+
 function looksLikeTelegramError(message, code, error) {
   if (typeof code === 'number') {
     return true;
@@ -299,6 +312,16 @@ export async function executeSendWithRetries(sendFn, options = {}) {
         const left = remainingMs();
         if (left <= 0) {
           throw new SendCommandError(timeoutDetails(attempt));
+        }
+        // A Telegram-imposed FLOOD_WAIT that exceeds the remaining timeout budget
+        // is a deliberate rate limit, not a hung connection. Abort early with the
+        // rate-limit reason instead of sleeping into a generic timeout.
+        if (details.type === 'rate_limit' && waitSeconds !== null && retryDelayMs > left) {
+          throw new SendCommandError({
+            ...details,
+            retryable: false,
+            message: formatRateLimitTimeoutMessage(waitSeconds, options.timeoutMs),
+          });
         }
         if (retryDelayMs > 0) {
           await sleep(Math.min(retryDelayMs, left));

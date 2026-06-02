@@ -5,6 +5,8 @@ CLI goal: human-readable output by default with --json for scripting.
 ## Global flags
 - --json
 - --timeout DURATION
+  - No default for most commands (long-running ones like `sync`, `--follow`, and `server` stay unbounded).
+  - `send` commands default to `30s` so agents/scripts never hang on a stuck connection. Override with `--timeout 5m`, or `--timeout 0` to disable.
 - --version
 
 Store location: OS app data dir (override with TGCLI_STORE).
@@ -103,6 +105,8 @@ Legacy `--offset-id` is accepted as a hidden alias for `--before-id`.
 - send photo --to <id|username> --photo PATH [--caption "..."] [--topic <id>] [--parse-mode markdown|html|none] [--reply-to <id>] [--schedule <iso>] [--silent] [--no-forwards] [--spoiler] [--caption-above] [--retries <n>] [--retry-backoff constant|linear|exponential|<ms>]
 - send file --to <id|username> --file PATH [--caption "..."] [--filename NAME] [--topic <id>] [--parse-mode markdown|html|none] [--reply-to <id>] [--schedule <iso>] [--silent] [--no-forwards] [--spoiler] [--caption-above] [--force-document] [--retries <n>] [--retry-backoff constant|linear|exponential|<ms>]
   - `--retries` defaults to `2` for all send commands.
+  - Send commands default to a `30s` wall-clock timeout so a stuck Telegram connection fails fast instead of hanging. Override with `--timeout <duration>` (e.g. `--timeout 5m`) or disable with `--timeout 0`. On timeout the command exits non-zero with: `Send timed out after 30s (no response from Telegram).`
+  - If Telegram returns a `FLOOD_WAIT` whose required wait exceeds the remaining timeout budget, the command aborts early reporting the rate limit (e.g. `Telegram rate-limited this send (FLOOD_WAIT 120s), which exceeds the 30s timeout.`) rather than silently timing out. Retry later or pass `--timeout 0`.
 
 ## media
 - media download --chat <id|username> --id <msgId> [--output PATH]
