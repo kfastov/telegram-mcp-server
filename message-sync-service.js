@@ -630,6 +630,7 @@ export default class MessageSyncService {
     this._ensureJobColumn('cursor_message_id', 'INTEGER');
     this._ensureJobColumn('cursor_message_date', 'TEXT');
     this._ensureJobColumn('backfill_min_date', 'TEXT');
+    this._ensureJobColumn('started_at', 'TEXT');
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
@@ -1971,6 +1972,28 @@ export default class MessageSyncService {
     return { canceled: ids.length, jobIds: ids };
   }
 
+  // Compact job-count snapshot for the control API (`/control/ping`) and the
+  // server idle monitor. `inProgress` includes pending+in_progress because a
+  // pending job still represents queued work the server must stay up for.
+  getJobCounts() {
+    const stats = this.getQueueStats();
+    return {
+      pending: stats.pending,
+      inProgress: stats.in_progress,
+    };
+  }
+
+  // Number of channels with realtime watch enabled. Used by the idle monitor:
+  // a server watching any channel must stay up to receive realtime updates.
+  getWatchedChannelCount() {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM channels
+      WHERE sync_enabled = 1
+    `).get();
+    return row?.cnt ?? 0;
+  }
+
   getQueueStats() {
     const rows = this.db.prepare(`
       SELECT status, COUNT(*) AS count
@@ -2773,6 +2796,27 @@ export default class MessageSyncService {
     );
   }
 
+  // Lightweight per-batch progress write used while a backfill run is mid-flight.
+  // Keeps `message_count`/cursor/`updated_at` live (and stamps `started_at` on the
+  // first batch) without touching status, so the control API and idle monitor can
+  // observe progress between terminal updates.
+  _updateJobProgress(id, { messageCount, cursorMessageId, cursorMessageDate }) {
+    this.db.prepare(`
+      UPDATE jobs
+      SET message_count = ?,
+          cursor_message_id = ?,
+          cursor_message_date = ?,
+          started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      messageCount ?? 0,
+      cursorMessageId ?? null,
+      cursorMessageDate ?? null,
+      id,
+    );
+  }
+
   _markJobError(id, error) {
     this.db.prepare(`
       UPDATE jobs
@@ -3507,6 +3551,17 @@ export default class MessageSyncService {
         currentOldestId = lowestIdInChunk;
         currentOldestDate = lowestDateInChunk || currentOldestDate;
       }
+
+      // Persist live progress after every batch so the control API and idle
+      // monitor see the archived count and resume cursor advance mid-run, not
+      // just on terminal completion. `started_at` is stamped on the first batch.
+      this._updateJobProgress(job.id, {
+        messageCount: this._countMessages(channelId),
+        cursorMessageId: nextOffsetId ?? null,
+        cursorMessageDate: Number.isFinite(nextOffsetDate) && nextOffsetDate > 0
+          ? toIsoString(nextOffsetDate)
+          : null,
+      });
 
       if (nextOffsetId === previousOffsetId && (nextOffsetDate ?? 0) === previousOffsetDate) {
         break;

@@ -35,6 +35,9 @@ const CONFIG_SPECS = [
   { key: 'mcp.enabled', path: ['mcp', 'enabled'], type: 'boolean' },
   { key: 'mcp.host', path: ['mcp', 'host'], type: 'string' },
   { key: 'mcp.port', path: ['mcp', 'port'], type: 'number' },
+  { key: 'control.enabled', path: ['control', 'enabled'], type: 'boolean' },
+  { key: 'control.host', path: ['control', 'host'], type: 'string' },
+  { key: 'control.port', path: ['control', 'port'], type: 'number' },
 ];
 
 const SEND_PARSE_MODES = ['markdown', 'html', 'none'];
@@ -161,7 +164,8 @@ function buildProgram() {
   program
     .command('server')
     .description('Run background sync service (MCP optional)')
-    .action(withGlobalOptions((globalFlags) => runServer(globalFlags)));
+    .option('--idle-exit <duration>', 'Exit after this idle period with no jobs or watched channels')
+    .action(withGlobalOptions((globalFlags, options) => runServer(globalFlags, options)));
 
   const service = program.command('service').description('Manage background service');
   service
@@ -1762,8 +1766,11 @@ async function runSync(globalFlags, options = {}) {
   }, timeoutMs);
 }
 
-async function runServer(globalFlags) {
+async function runServer(globalFlags, options = {}) {
   const timeoutMs = globalFlags.timeoutMs;
+  // When no --idle-exit is passed the server stays up forever (manual server is
+  // always-on). Validate the duration here so a bad value fails fast in the CLI.
+  const idleExitMs = options.idleExit ? parseDuration(options.idleExit) : null;
   let child = null;
 
   const runChild = () => new Promise((resolve, reject) => {
@@ -1781,7 +1788,12 @@ async function runServer(globalFlags) {
     process.on('SIGINT', handleSignal);
     process.on('SIGTERM', handleSignal);
 
-    child = spawn(process.execPath, [serverPath], {
+    const childArgs = [serverPath];
+    if (Number.isFinite(idleExitMs) && idleExitMs > 0) {
+      childArgs.push('--idle-exit', String(idleExitMs));
+    }
+
+    child = spawn(process.execPath, childArgs, {
       stdio: 'inherit',
       env: process.env,
     });
