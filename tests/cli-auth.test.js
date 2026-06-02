@@ -85,7 +85,7 @@ describe('cli auth command', () => {
     expect(login).toHaveBeenCalledTimes(1);
     expect(createMessageSyncServiceMock).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith(
-      'Authenticated. Run `tgcli sync --once` or `tgcli sync --follow` when you need archive data.',
+      'Authenticated. Run `tgcli backfill --once` or `tgcli backfill --follow` when you need archive data.',
     );
     expect(destroy).toHaveBeenCalledTimes(1);
   });

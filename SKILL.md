@@ -57,10 +57,12 @@ tgcli send file --to @channel --file ./report.pdf --caption "FYI"
 tgcli send text --to @username --message "Hello"
 ```
 
-### Sync & Service
+### Backfill & Service
 ```bash
-tgcli sync --follow
-tgcli sync jobs add --chat @channel --min-date 2024-01-01T00:00:00Z
+tgcli channels watch --chat @channel   # subscribe a chat for archiving (queues a backfill)
+tgcli backfill --follow                 # `sync` remains a silent alias of `backfill`
+tgcli backfill jobs add --chat @channel --min-date 2024-01-01T00:00:00Z
+tgcli channels unwatch --chat @channel  # stop archiving a chat
 tgcli service install
 tgcli service start
 ```
@@ -84,4 +86,5 @@ tgcli channels list --limit 10 --json
 
 - Use `--source live|archive|both` when listing or searching messages.
 - `--json` is best for AI/tooling pipelines.
-- `send` commands time out after `30s` by default so they never hang on a stuck connection. Override with `--timeout 5m` or disable with `--timeout 0`. Long-running commands (`sync`, `--follow`, `server`) are unbounded by default.
+- `send` commands time out after `30s` by default so they never hang on a stuck connection. Override with `--timeout 5m` or disable with `--timeout 0`. Long-running commands (`backfill`, `--follow`, `server`) are unbounded by default.
+- `backfill` is the canonical archive command; `sync` (and `channels sync --enable/--disable`) keep working as aliases. Prefer `channels watch`/`channels unwatch` to subscribe/unsubscribe a chat.

@@ -5,7 +5,7 @@ CLI goal: human-readable output by default with --json for scripting.
 ## Global flags
 - --json
 - --timeout DURATION
-  - No default for most commands (long-running ones like `sync`, `--follow`, and `server` stay unbounded).
+  - No default for most commands (long-running ones like `backfill`, `--follow`, and `server` stay unbounded).
   - `send` commands default to `30s` so agents/scripts never hang on a stuck connection. Override with `--timeout 5m`, or `--timeout 0` to disable.
 - --quiet
   - Suppress informational progress/status output on stderr (e.g. the `Connecting to Telegram…` note from `send`). Errors and primary stdout/`--json` output are unaffected.
@@ -22,14 +22,15 @@ MCP: disabled by default (set `mcp.enabled` in config.json to true to serve MCP)
 - auth status
 - auth logout
 
-## sync
-- sync
+## backfill
+- backfill (alias: `sync`)
   - Flags: --once | --follow, --idle-exit 30s, --download-media, --refresh-contacts, --refresh-groups
-- sync status
-- sync jobs list [--status] [--limit] [--channel]
-- sync jobs add --chat <id|username> [--min-date ISO] [--depth N]
-- sync jobs retry [--job-id] [--channel] [--all-errors]
-- sync jobs cancel --job-id|--channel
+- backfill status
+- backfill jobs list [--status] [--limit] [--channel]
+- backfill jobs add --chat <id|username> [--min-date ISO] [--depth N]
+- backfill jobs retry [--job-id] [--channel] [--all-errors]
+- backfill jobs cancel --job-id|--channel
+- `sync` remains a silent alias of `backfill` (and every subcommand), so existing `sync …` invocations keep working unchanged.
 
 ## server
 - server
@@ -49,8 +50,11 @@ MCP: disabled by default (set `mcp.enabled` in config.json to true to serve MCP)
 ## channels
 - channels list [--limit] [--query]
 - channels show --chat <id|username>
-- channels sync --chat <id|username> --enable|--disable
-  - Enabling queues a backfill job; run `tgcli sync --once` or `tgcli sync --follow` to process it.
+- channels watch --chat <id|username>
+  - Subscribe a chat for archiving: enables sync and queues a backfill job; run `tgcli backfill --once` or `tgcli backfill --follow` to process it.
+- channels unwatch --chat <id|username>
+  - Unsubscribe a chat from archiving (disables sync).
+  - `channels sync --chat <id|username> --enable|--disable` remains as a hidden alias of watch/unwatch.
 
 ## topics (forum supergroups)
 - topics list --chat <id|username> [--limit]

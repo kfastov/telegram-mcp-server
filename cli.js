@@ -26,7 +26,7 @@ const CLI_PATH = fileURLToPath(import.meta.url);
 const SERVICE_STATE_FILE = 'service-state.json';
 const LAUNCHD_LABEL = 'com.kfastov.tgcli';
 const SYSTEMD_SERVICE_NAME = 'tgcli';
-const AUTH_SYNC_HINT = 'Run `tgcli sync --once` or `tgcli sync --follow` when you need archive data.';
+const AUTH_SYNC_HINT = 'Run `tgcli backfill --once` or `tgcli backfill --follow` when you need archive data.';
 const CONFIG_SPECS = [
   { key: 'apiId', path: ['apiId'], type: 'number' },
   { key: 'apiHash', path: ['apiHash'], type: 'string', secret: true },
@@ -111,7 +111,15 @@ function buildProgram() {
       runFeedback(globalFlags, messageParts, options),
     ));
 
-  const sync = program.command('sync').description('Archive backfill and realtime sync');
+  // `backfill` is the canonical name; `sync` stays as a silent alias so existing
+  // invocations (and the subcommands below) keep working unchanged. Commander's
+  // `.alias()` makes the alias resolve to the same command tree, so every nested
+  // subcommand (`backfill jobs add`, `backfill status`, ...) is reachable under
+  // both `backfill <...>` and `sync <...>`.
+  const sync = program
+    .command('backfill')
+    .alias('sync')
+    .description('Archive backfill and realtime sync');
   sync
     .option('--once', 'Run once and exit')
     .option('--follow', 'Keep syncing realtime updates')
@@ -195,9 +203,28 @@ function buildProgram() {
     .description('Show channel info')
     .option('--chat <id|username>', 'Channel identifier')
     .action(withGlobalOptions((globalFlags, options) => runChannelsShow(globalFlags, options)));
+  // `watch`/`unwatch` are the canonical per-chat archive subscription commands.
+  // They delegate to the same handler as the legacy `channels sync --enable/--disable`
+  // by pre-setting the enable/disable flag, so `watch` also queues a backfill job
+  // when none exists (parity with the old enable behavior).
   channels
-    .command('sync')
-    .description('Enable or disable sync')
+    .command('watch')
+    .description('Subscribe a chat for archiving (enable sync, queue a backfill)')
+    .option('--chat <id|username>', 'Channel identifier')
+    .action(withGlobalOptions((globalFlags, options) =>
+      runChannelsSync(globalFlags, { ...options, enable: true }),
+    ));
+  channels
+    .command('unwatch')
+    .description('Unsubscribe a chat from archiving (disable sync)')
+    .option('--chat <id|username>', 'Channel identifier')
+    .action(withGlobalOptions((globalFlags, options) =>
+      runChannelsSync(globalFlags, { ...options, disable: true }),
+    ));
+  // Hidden back-compat alias of watch/unwatch via explicit --enable/--disable.
+  channels
+    .command('sync', { hidden: true })
+    .description('Enable or disable sync (alias of watch/unwatch)')
     .option('--chat <id|username>', 'Channel identifier')
     .option('--enable', 'Enable sync')
     .option('--disable', 'Disable sync')
@@ -658,15 +685,14 @@ function printArchiveFallbackNote(channelIds) {
   if (channelIds.length === 1) {
     const id = channelIds[0];
     const message = `${prefix} no archived messages for ${id}. Showing live results. ` +
-      `To archive: tgcli channels sync --chat ${id} --enable; ` +
-      `tgcli sync jobs add --chat ${id}; ` +
-      'tgcli sync --once (or --follow).';
+      `To archive: tgcli channels watch --chat ${id}; ` +
+      'tgcli backfill --once (or --follow).';
     console.log(colorizeNote(message));
     return;
   }
   const message = `${prefix} no archived messages for chats: ${channelIds.join(', ')}. ` +
-    'Showing live results. To archive: tgcli channels sync --chat <id> --enable; ' +
-    'tgcli sync jobs add --chat <id>; tgcli sync --once (or --follow).';
+    'Showing live results. To archive: tgcli channels watch --chat <id>; ' +
+    'tgcli backfill --once (or --follow).';
   console.log(colorizeNote(message));
 }
 
@@ -2443,7 +2469,7 @@ async function runChannelsSync(globalFlags, options = {}) {
             : '';
           console.log(
             `Sync enabled for ${result.channel_id}.${jobMessage} ` +
-              'Run `tgcli sync --once` (or `tgcli sync --follow`/`tgcli server`) to process.',
+              'Run `tgcli backfill --once` (or `tgcli backfill --follow`/`tgcli server`) to process.',
           );
         } else {
           console.log(`Sync disabled for ${result.channel_id}`);
