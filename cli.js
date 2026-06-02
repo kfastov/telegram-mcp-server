@@ -57,6 +57,7 @@ function buildProgram() {
     .usage('[options] <command>')
     .option('--json', 'Machine-readable output')
     .option('--timeout <duration>', 'Wall-clock timeout (e.g. 30s, 5m)')
+    .option('--quiet', 'Suppress progress/status output on stderr')
     .version(readVersion(), '--version', 'Print version and exit')
     .showHelpAfterError(true);
 
@@ -590,6 +591,7 @@ function getGlobalFlags(command) {
   const timeoutMs = options.timeout ? parseDuration(options.timeout) : null;
   return {
     json: Boolean(options.json),
+    quiet: Boolean(options.quiet),
     timeout: options.timeout ?? null,
     timeoutMs,
   };
@@ -3030,7 +3032,11 @@ function normalizeSendCommandError(error, { method, retries, attempt = 1 } = {})
 
 // Brief progress note on stderr so users/agents see the command is alive while
 // the MTProto connection is established. stderr keeps stdout --json output clean.
-function printSendStatus(message) {
+// Suppressed by the global --quiet flag.
+function printSendStatus(message, globalFlags) {
+  if (globalFlags?.quiet) {
+    return;
+  }
   process.stderr.write(`${message}\n`);
 }
 
@@ -3073,7 +3079,7 @@ async function runSendText(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
-      printSendStatus('Connecting to Telegram…');
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {
@@ -3138,7 +3144,7 @@ async function runSendPhoto(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
-      printSendStatus('Connecting to Telegram…');
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {
@@ -3204,7 +3210,7 @@ async function runSendFile(globalFlags, options = {}) {
       const retryBackoff = parseRetryBackoff(options.retryBackoff);
       const storeDir = resolveStoreDir();
       const release = acquireStoreLock(storeDir);
-      printSendStatus('Connecting to Telegram…');
+      printSendStatus('Connecting to Telegram…', globalFlags);
       const { telegramClient, messageSyncService } = createServices({ storeDir });
       try {
         if (!(await telegramClient.isAuthorized().catch(() => false))) {

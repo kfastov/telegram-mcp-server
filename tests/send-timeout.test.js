@@ -257,4 +257,27 @@ describe('send command default timeout (CLI integration)', () => {
     // Detach the dangling promise so the test runner can exit cleanly.
     void done;
   });
+
+  it('prints the Connecting status on stderr by default (no --quiet)', async () => {
+    services.current = makeFakeServices({ sendImpl: async () => ({ messageId: 11 }) });
+
+    await runProgram(['send', 'text', '--to', '@x', '--message', 'hi']);
+
+    expect(process.exitCode).toBeUndefined();
+    const stderrText = errSpy.mock.calls.map((c) => c[0]).join('');
+    expect(stderrText).toContain('Connecting to Telegram');
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Message sent (11).');
+  });
+
+  it('suppresses the Connecting status with --quiet', async () => {
+    services.current = makeFakeServices({ sendImpl: async () => ({ messageId: 12 }) });
+
+    await runProgram(['send', 'text', '--to', '@x', '--message', 'hi', '--quiet']);
+
+    expect(process.exitCode).toBeUndefined();
+    const stderrText = errSpy.mock.calls.map((c) => c[0]).join('');
+    expect(stderrText).not.toContain('Connecting to Telegram');
+    // Primary stdout/--json output is unaffected.
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Message sent (12).');
+  });
 });

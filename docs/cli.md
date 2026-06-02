@@ -7,6 +7,8 @@ CLI goal: human-readable output by default with --json for scripting.
 - --timeout DURATION
   - No default for most commands (long-running ones like `sync`, `--follow`, and `server` stay unbounded).
   - `send` commands default to `30s` so agents/scripts never hang on a stuck connection. Override with `--timeout 5m`, or `--timeout 0` to disable.
+- --quiet
+  - Suppress informational progress/status output on stderr (e.g. the `Connecting to Telegram…` note from `send`). Errors and primary stdout/`--json` output are unaffected.
 - --version
 
 Store location: OS app data dir (override with TGCLI_STORE).
