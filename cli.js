@@ -22,6 +22,12 @@ import {
 } from './core/send-utils.js';
 import { resolveStoreDir } from './core/store.js';
 import { parseDuration } from './core/duration.js';
+import {
+  cancelBackfill,
+  enqueueBackfill,
+  ensureServer,
+  pingServer,
+} from './core/control-client.js';
 
 const CLI_PATH = fileURLToPath(import.meta.url);
 const SERVICE_STATE_FILE = 'service-state.json';
@@ -125,14 +131,39 @@ function buildProgram() {
     .alias('sync')
     .description('Archive backfill and realtime sync');
   sync
+    // Server-executed one-shot client (issue #30/#26): `--chat` enqueues a
+    // backfill on the always-on server (auto-starting it) and follows progress.
+    .option('--chat <id|username>', 'Backfill a single chat via the control server')
+    .option('--depth <n>', 'Maximum messages to backfill (with --chat)')
+    .option('--min-date <iso>', 'Earliest date to backfill (with --chat)')
+    .option('--background', 'Enqueue and return immediately (with --chat)')
+    // Legacy in-process sync flags (no --chat).
     .option('--once', 'Run once and exit')
     .option('--follow', 'Keep syncing realtime updates')
     .option('--idle-exit <duration>', 'Exit after idle period')
-    .action(withGlobalOptions((globalFlags, options) => runSync(globalFlags, options)));
+    .action(withGlobalOptions((globalFlags, options) => runBackfill(globalFlags, options)));
   sync
     .command('status')
-    .description('Show sync status')
+    .description('Show backfill progress and server status')
     .action(withGlobalOptions((globalFlags) => runSyncStatus(globalFlags)));
+  sync
+    .command('count')
+    .description('Print the number of in-progress backfills')
+    .action(withGlobalOptions((globalFlags) => runBackfillCount(globalFlags)));
+  sync
+    .command('wait')
+    .description('Start the server if needed and wait for backfills to drain')
+    .action(withGlobalOptions((globalFlags) => runBackfillWait(globalFlags)));
+  sync
+    .command('cancel')
+    .description('Cancel backfills for a chat')
+    .option('--chat <id|username>', 'Channel identifier')
+    // --chat is also declared on the parent `backfill`; commander binds the
+    // duplicated flag to the parent, so merge via optsWithGlobals (and validate
+    // presence inside the handler rather than with requiredOption).
+    .action(withGlobalOptions((globalFlags, options, command) =>
+      runBackfillCancel(globalFlags, command.optsWithGlobals()),
+    ));
   const syncJobs = sync.command('jobs').description('Manage sync jobs');
   syncJobs
     .command('list')
@@ -147,7 +178,13 @@ function buildProgram() {
     .option('--chat <id|username>', 'Channel identifier')
     .option('--depth <n>', 'Maximum messages to backfill')
     .option('--min-date <iso>', 'Earliest date to backfill')
-    .action(withGlobalOptions((globalFlags, options) => runSyncJobsAdd(globalFlags, options)));
+    // optsWithGlobals merges in the parent `backfill` options. The parent now
+    // declares --chat/--depth/--min-date too (for `backfill --chat`), and
+    // commander binds those duplicated flags to the parent scope; merging here
+    // keeps `backfill jobs add --chat X` working.
+    .action(withGlobalOptions((globalFlags, options, command) =>
+      runSyncJobsAdd(globalFlags, command.optsWithGlobals()),
+    ));
   syncJobs
     .command('retry')
     .description('Retry failed jobs')
@@ -1701,6 +1738,218 @@ async function runFeedback(globalFlags, messageParts, options = {}) {
   }, timeoutMs);
 }
 
+// A backfill job is terminal once the worker stops touching it: `idle` means the
+// backfill reached its target/exhausted history; `error` means it failed.
+const TERMINAL_JOB_STATUSES = new Set(['idle', 'error']);
+
+// Briefly take a read lock, read job state, then release — never held across a
+// poll loop. Holding it for the whole wait would block CLI writers like `send`,
+// which need the write lock. Returns whatever the reader produces.
+//
+// We deliberately close the DB handle directly rather than calling
+// service.shutdown(): shutdown() rewrites in_progress jobs back to pending, which
+// would corrupt the job state owned by the running server we are merely observing.
+function withReadSnapshot(storeDir, reader) {
+  const release = acquireReadLock(storeDir);
+  let service;
+  let telegramClient;
+  try {
+    ({ telegramClient, messageSyncService: service } = createServices({ storeDir }));
+    return reader(service);
+  } finally {
+    if (service?.db?.open) {
+      service.db.close();
+    }
+    if (telegramClient) {
+      void telegramClient.destroy?.();
+    }
+    release();
+  }
+}
+
+function jobProgressLine(job) {
+  const label = job.peer_title || job.channel_id;
+  const done = job.message_count ?? 0;
+  const target = job.target_message_count ?? 0;
+  const pct = target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+  return `Backfilling ${label}: ${done}/${target} (${pct}%)`;
+}
+
+function writeProgress(globalFlags, line) {
+  if (!globalFlags.quiet) {
+    process.stderr.write(`${line}\n`);
+  }
+}
+
+// Server-executed backfill (issue #30/#26). With `--chat`, enqueue on the
+// always-on control server (auto-starting it) and either return the job id
+// (`--background`) or follow progress in the foreground. Without `--chat`, fall
+// through to the unchanged in-process legacy sync (so `sync`/`backfill --once`
+// /`--follow` keep working).
+async function runBackfill(globalFlags, options = {}) {
+  if (!options.chat) {
+    return runSync(globalFlags, options);
+  }
+
+  // Long-running command: do NOT apply the send default timeout. A user-supplied
+  // --timeout is still honored via runWithTimeout below.
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
+    const depth = parsePositiveInt(options.depth, '--depth');
+    const minDate = options.minDate ?? null;
+
+    await ensureServer(storeDir, { idleExit: '60s' });
+    const enqueued = await enqueueBackfill(storeDir, {
+      chatId: options.chat,
+      depth,
+      minDate,
+    });
+    const channelId = enqueued?.channelId ?? null;
+    const jobId = enqueued?.jobId ?? null;
+
+    if (options.background) {
+      if (globalFlags.json) {
+        writeJson({ jobId, channelId, status: enqueued?.status ?? null });
+      } else {
+        console.log(`Queued backfill for ${channelId} (job #${jobId}).`);
+      }
+      return;
+    }
+
+    // Ctrl-C detaches instead of cancelling: the server keeps draining the queue.
+    let detached = false;
+    const onSigint = () => {
+      detached = true;
+      writeProgress(globalFlags, 'Still running in the background — check `tgcli backfill status`');
+      process.exit(0);
+    };
+    process.on('SIGINT', onSigint);
+
+    try {
+      let job = null;
+      while (!detached) {
+        job = withReadSnapshot(storeDir, (service) => {
+          const jobs = service.listJobs({ channelId, limit: 1 });
+          return jobs[0] ?? null;
+        });
+        if (!job) {
+          // Job already gone (cancelled or never persisted) — nothing to follow.
+          break;
+        }
+        writeProgress(globalFlags, jobProgressLine(job));
+        if (TERMINAL_JOB_STATUSES.has(job.status)) {
+          break;
+        }
+        await delay(1000);
+      }
+
+      if (detached) {
+        return;
+      }
+
+      if (job && job.status === 'error') {
+        if (globalFlags.json) {
+          writeJson({ ok: false, jobId: job.id, channelId, status: job.status, error: job.error ?? null });
+        } else {
+          console.error(`Backfill failed for ${channelId}: ${job.error ?? 'unknown error'}`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+
+      if (globalFlags.json) {
+        writeJson({
+          ok: true,
+          jobId: job?.id ?? jobId,
+          channelId,
+          status: job?.status ?? null,
+          messageCount: job?.message_count ?? 0,
+          targetMessageCount: job?.target_message_count ?? 0,
+        });
+      } else if (job) {
+        console.log(`Backfill complete for ${channelId}: ${job.message_count ?? 0} message(s) archived.`);
+      } else {
+        console.log(`Backfill for ${channelId} is no longer queued.`);
+      }
+    } finally {
+      process.off('SIGINT', onSigint);
+    }
+  }, globalFlags.timeoutMs);
+}
+
+// Snapshot of in-progress + pending backfills plus whether the server is up.
+async function runBackfillCount(globalFlags) {
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
+    const count = withReadSnapshot(storeDir, (service) => service.getJobCounts().inProgress);
+    if (globalFlags.json) {
+      writeJson({ inProgress: count });
+    } else {
+      console.log(String(count));
+    }
+  }, globalFlags.timeoutMs);
+}
+
+// Start the server if needed (so the queue actually drains) and wait until no
+// pending/in-progress backfills remain, showing progress to stderr.
+async function runBackfillWait(globalFlags) {
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
+    await ensureServer(storeDir, { idleExit: '60s' });
+    while (true) {
+      const { active, jobs } = withReadSnapshot(storeDir, (service) => {
+        const counts = service.getJobCounts();
+        const inFlight = service.listJobs({ status: 'in_progress', limit: 50 });
+        return { active: counts.pending + counts.inProgress, jobs: inFlight };
+      });
+      for (const job of jobs) {
+        writeProgress(globalFlags, jobProgressLine(job));
+      }
+      if (active === 0) {
+        break;
+      }
+      await delay(1000);
+    }
+    if (globalFlags.json) {
+      writeJson({ ok: true, drained: true });
+    } else if (!globalFlags.quiet) {
+      console.log('Backfill queue drained.');
+    }
+  }, globalFlags.timeoutMs);
+}
+
+// Cancel backfills for a chat. Prefer the control server (so an in-flight job is
+// stopped by the worker); fall back to a direct DB delete when no server is up.
+async function runBackfillCancel(globalFlags, options = {}) {
+  return runWithTimeout(async () => {
+    if (!options.chat) {
+      throw new Error('--chat is required');
+    }
+    const storeDir = resolveStoreDir();
+    const ping = await pingServer(storeDir);
+    let result;
+    if (ping) {
+      result = await cancelBackfill(storeDir, { chatId: options.chat });
+    } else {
+      // No server running: same direct path as `backfill jobs cancel --channel`.
+      const release = acquireStoreLock(storeDir);
+      const { telegramClient, messageSyncService } = createServices({ storeDir });
+      try {
+        result = messageSyncService.cancelJobs({ channelId: options.chat });
+      } finally {
+        await messageSyncService.shutdown();
+        await telegramClient.destroy();
+        release();
+      }
+    }
+    if (globalFlags.json) {
+      writeJson(result);
+    } else {
+      console.log(`Canceled ${result.canceled} job(s).`);
+    }
+  }, globalFlags.timeoutMs);
+}
+
 async function runSync(globalFlags, options = {}) {
   const timeoutMs = globalFlags.timeoutMs;
   return runWithTimeout(async () => {
@@ -2139,18 +2388,48 @@ async function runSyncStatus(globalFlags) {
   const timeoutMs = globalFlags.timeoutMs;
   return runWithTimeout(async () => {
     const storeDir = resolveStoreDir();
-    const { telegramClient, messageSyncService } = createServices({ storeDir });
-    try {
-      const queue = messageSyncService.getQueueStats();
-      if (globalFlags.json) {
-        writeJson({ queue });
-      } else {
-        console.log(`QUEUE: pending=${queue.pending} in_progress=${queue.in_progress} idle=${queue.idle} error=${queue.error}`);
-        console.log(`PROCESSING: ${queue.processing}`);
+    // Snapshot the queue + active backfills under a brief read lock so a running
+    // server keeps its write lock free.
+    const { queue, jobs } = withReadSnapshot(storeDir, (service) => ({
+      queue: service.getQueueStats(),
+      jobs: service.listJobs({ limit: 100 }),
+    }));
+    // in_progress first, then pending — the chats actively/imminently backfilling.
+    const active = jobs.filter((job) => job.status === 'in_progress' || job.status === 'pending');
+    const ping = await pingServer(storeDir);
+
+    if (globalFlags.json) {
+      writeJson({
+        server: ping ? { up: true, pid: ping.pid, version: ping.version, startedAt: ping.startedAt } : { up: false },
+        queue,
+        backfills: active.map((job) => ({
+          jobId: job.id,
+          channelId: job.channel_id,
+          title: job.peer_title ?? null,
+          status: job.status,
+          messageCount: job.message_count ?? 0,
+          targetMessageCount: job.target_message_count ?? 0,
+          cursorDate: job.cursor_message_date ?? null,
+          updatedAt: job.updated_at ?? null,
+        })),
+      });
+      return;
+    }
+
+    console.log(`QUEUE: pending=${queue.pending} in_progress=${queue.in_progress} idle=${queue.idle} error=${queue.error}`);
+    console.log(`SERVER: ${ping ? `up (pid ${ping.pid})` : 'down'}`);
+    if (active.length === 0) {
+      console.log('No active backfills.');
+    } else {
+      for (const job of active) {
+        const label = job.peer_title || job.channel_id;
+        const done = job.message_count ?? 0;
+        const target = job.target_message_count ?? 0;
+        const pct = target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+        const cursor = job.cursor_message_date ? ` cursor=${job.cursor_message_date}` : '';
+        const updated = job.updated_at ? ` updated=${job.updated_at}` : '';
+        console.log(`  ${label} [${job.status}] ${done}/${target} (${pct}%)${cursor}${updated}`);
       }
-    } finally {
-      await messageSyncService.shutdown();
-      await telegramClient.destroy();
     }
   }, timeoutMs);
 }
