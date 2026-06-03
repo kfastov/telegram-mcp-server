@@ -1,6 +1,8 @@
 import { resolveStoreDir } from './store.js';
 import { acquireReadLock, acquireStoreLock } from '../store-lock.js';
 import { createMessageSyncService, createTelegramClient, resolveValidatedConfig } from './services.js';
+import { invoke, pingServer } from './control-client.js';
+import { OPERATIONS } from './operations.js';
 
 // Runs fn(ctx) with exactly the services a command needs, owning the surrounding
 // lifecycle: timeout, store dir, store lock, scoped service creation, and teardown.
@@ -75,6 +77,36 @@ export async function withCommand(globalFlags, opts, fn) {
       }
     }
   }, timeoutMs, onTimeout, timeoutMessage);
+}
+
+// Runs a shared operation server-first with a local fallback, returning its
+// structured result. Both paths execute the SAME OPERATIONS[op], so the result —
+// and therefore whatever the caller renders from it — is identical regardless of
+// who served it.
+//
+//   - If a control server is already running, ask it to run the op against its
+//     warm (already-authed) services via POST /control/invoke.
+//   - Otherwise run the op locally inside withCommand with the requested
+//     services/lock. requireAuth enforces the local auth check; the warm path
+//     needs none because the server's client is already logged in.
+//
+// Opportunistic only: this never starts a server, so an offline run keeps the
+// current local behavior.
+export async function runOperation(globalFlags, { op, args, need, lock, requireAuth = false }) {
+  const handler = OPERATIONS[op];
+  if (!handler) {
+    throw new Error(`runOperation: unknown operation "${op}"`);
+  }
+  const storeDir = resolveStoreDir();
+  if (await pingServer(storeDir)) {
+    return invoke(storeDir, { op, args });
+  }
+  return withCommand(globalFlags, { need, lock }, async (ctx) => {
+    if (requireAuth && !(await ctx.telegramClient.isAuthorized().catch(() => false))) {
+      throw new Error('Not authenticated. Run `node cli.js auth` first.');
+    }
+    return handler(ctx, args);
+  });
 }
 
 const VALID_NEEDS = new Set(['telegram', 'archive', 'full', 'worker']);

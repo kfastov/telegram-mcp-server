@@ -19,6 +19,7 @@ import {
 } from "./core/control-server.js";
 import { readJsonBody } from "./core/http-util.js";
 import { parseDuration } from "./core/duration.js";
+import { OPERATIONS } from "./core/operations.js";
 
 const SERVICE_STATE_FILE = "service-state.json";
 
@@ -700,7 +701,7 @@ function createServerInstance() {
     listChannelsSchema,
     async ({ limit }) => {
       await telegramClient.ensureLogin();
-      const dialogs = await telegramClient.listDialogs(limit ?? 50);
+      const dialogs = await OPERATIONS.listChannels({ telegramClient, messageSyncService }, { limit });
 
       return {
         content: [
@@ -1624,7 +1625,10 @@ function createServerInstance() {
     groupsInviteLinkGetSchema,
     async ({ channelId }) => {
       await telegramClient.ensureLogin();
-      const link = await telegramClient.getGroupInviteLink(channelId);
+      const link = await OPERATIONS.getGroupInviteLink(
+        { telegramClient, messageSyncService },
+        { chat: channelId },
+      );
 
       return {
         content: [
@@ -2046,6 +2050,7 @@ if (controlEnabled) {
   const startedAt = serviceState.startedAt;
   const handleControlRequest = createControlRequestHandler({
     service: messageSyncService,
+    warmServices: { telegramClient, messageSyncService },
     token: controlToken,
     pid: process.pid,
     version: serviceState.version,

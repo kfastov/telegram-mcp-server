@@ -5,6 +5,7 @@ import {
   createControlRequestHandler,
   CONTROL_TOKEN_HEADER,
 } from '../core/control-server.js';
+import { OPERATIONS } from '../core/operations.js';
 
 const TOKEN = 'test-token-abc123';
 
@@ -165,5 +166,70 @@ describe('control API request handler', () => {
   it('returns 404 for non-control paths', async () => {
     const { status } = await request(port, 'GET', '/something-else', { token: TOKEN });
     expect(status).toBe(404);
+  });
+});
+
+describe('POST /control/invoke', () => {
+  let warmServices;
+  let ensureLogin;
+  let server;
+  let port;
+
+  beforeEach(async () => {
+    warmServices = {
+      telegramClient: {
+        listDialogs: vi.fn(() => Promise.resolve([{ id: '1', title: 'Warm' }])),
+        searchDialogs: vi.fn(() => Promise.resolve([])),
+        getGroupInviteLink: vi.fn(() => Promise.resolve({ link: 'https://t.me/+warm' })),
+      },
+      messageSyncService: {},
+    };
+    ensureLogin = vi.fn(() => Promise.resolve());
+    const handler = createControlRequestHandler({
+      service: makeService(),
+      warmServices,
+      token: TOKEN,
+      pid: 1,
+      version: '1',
+      startedAt: 's',
+      ensureLogin,
+    });
+    ({ server, port } = await startServer(handler));
+  });
+
+  afterEach(() => {
+    server.close();
+    vi.restoreAllMocks();
+  });
+
+  it('runs a known op against the warm services and returns its result', async () => {
+    const spy = vi.spyOn(OPERATIONS, 'listChannels');
+    const { status, json } = await request(port, 'POST', '/control/invoke', {
+      token: TOKEN,
+      body: { op: 'listChannels', args: { limit: 10 } },
+    });
+    expect(status).toBe(200);
+    expect(spy).toHaveBeenCalledWith(warmServices, { limit: 10 });
+    expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(10);
+    expect(json).toEqual({ result: [{ id: '1', title: 'Warm' }] });
+    expect(ensureLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 for an unknown op (no handler invoked)', async () => {
+    const { status, json } = await request(port, 'POST', '/control/invoke', {
+      token: TOKEN,
+      body: { op: 'doesNotExist', args: {} },
+    });
+    expect(status).toBe(400);
+    expect(json.error).toMatch(/Unknown operation/);
+    expect(ensureLogin).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invoke without a token', async () => {
+    const { status } = await request(port, 'POST', '/control/invoke', {
+      body: { op: 'listChannels', args: {} },
+    });
+    expect(status).toBe(401);
+    expect(warmServices.telegramClient.listDialogs).not.toHaveBeenCalled();
   });
 });
