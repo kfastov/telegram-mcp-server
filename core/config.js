@@ -42,6 +42,7 @@ export function normalizeConfig(raw = {}) {
   const apiHash = normalizeValue(raw.apiHash ?? raw.api_hash);
   const phoneNumber = normalizeValue(raw.phoneNumber ?? raw.phone ?? raw.phone_number);
   const mcpRaw = raw.mcp && typeof raw.mcp === 'object' ? raw.mcp : {};
+  const controlRaw = raw.control && typeof raw.control === 'object' ? raw.control : {};
   const feedbackRaw = raw.feedback && typeof raw.feedback === 'object' ? raw.feedback : {};
   const mcpEnabled = normalizeBoolean(raw.mcpEnabled ?? raw.mcp_enabled ?? mcpRaw.enabled, false);
   const mcp = {
@@ -56,6 +57,19 @@ export function normalizeConfig(raw = {}) {
   if (Number.isFinite(mcpPort) && mcpPort > 0) {
     mcp.port = mcpPort;
   }
+  // Loopback control API: always-on (default enabled) and independent of mcp.*.
+  const controlEnabled = normalizeBoolean(
+    raw.controlEnabled ?? raw.control_enabled ?? controlRaw.enabled,
+    true,
+  );
+  const control = {
+    enabled: controlEnabled,
+  };
+  const controlHost = normalizeValue(controlRaw.host ?? raw.controlHost ?? raw.control_host);
+  control.host = controlHost || '127.0.0.1';
+  const controlPortRaw = controlRaw.port ?? raw.controlPort ?? raw.control_port;
+  const controlPort = Number(controlPortRaw);
+  control.port = Number.isFinite(controlPort) && controlPort > 0 ? controlPort : 8765;
   const feedbackChatId = normalizeValue(
     feedbackRaw.chatId ?? raw.feedbackChatId ?? raw.feedback_chat_id,
   );
@@ -64,6 +78,7 @@ export function normalizeConfig(raw = {}) {
     apiHash,
     phoneNumber,
     mcp,
+    control,
   };
   if (feedbackChatId) {
     normalized.feedback = { chatId: feedbackChatId };

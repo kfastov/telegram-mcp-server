@@ -10,6 +10,15 @@ import { z } from "zod";
 import { loadConfig, validateConfig } from "./core/config.js";
 import { createServices } from "./core/services.js";
 import { resolveStoreDir } from "./core/store.js";
+import {
+  createControlRequestHandler,
+  generateControlToken,
+  writeControlFile,
+  removeControlFile,
+  isIdle,
+} from "./core/control-server.js";
+import { readJsonBody } from "./core/http-util.js";
+import { parseDuration } from "./core/duration.js";
 
 const SERVICE_STATE_FILE = "service-state.json";
 
@@ -26,10 +35,65 @@ const resolvedHost = mcpConfig.host ?? process.env.MCP_HOST ?? process.env.FASTM
 const resolvedPort = Number(mcpConfig.port ?? process.env.MCP_PORT ?? process.env.FASTMCP_PORT ?? "8080");
 const HOST = resolvedHost;
 const PORT = Number.isFinite(resolvedPort) && resolvedPort > 0 ? resolvedPort : 8080;
+
+// Always-on loopback control API. Separate listener from MCP and not gated by
+// mcp.enabled; bound to loopback only.
+const controlConfig = config?.control ?? {};
+const controlEnabled = controlConfig.enabled !== false;
+const CONTROL_HOST = controlConfig.host ?? "127.0.0.1";
+const controlPortRaw = Number(controlConfig.port ?? 8765);
+const CONTROL_PORT = Number.isFinite(controlPortRaw) && controlPortRaw > 0 ? controlPortRaw : 8765;
+
+// Idle-exit window (ms). Plumbed from the CLI `server --idle-exit <duration>`
+// via argv or the TGCLI_IDLE_EXIT env var. When unset/zero the server stays up
+// forever. See resolveIdleExitMs for the ms-vs-duration-string handling.
+const IDLE_EXIT_MS = resolveIdleExitMs(readIdleExitArg());
+const IDLE_CHECK_INTERVAL_MS = 5000;
+
 const { telegramClient, messageSyncService } = createServices({ storeDir, config });
 
 let telegramReady = false;
 let serviceState = null;
+let controlToken = null;
+let controlServer = null;
+let idleTimer = null;
+let lastControlActivityAt = Date.now();
+
+function readIdleExitArg() {
+  const args = process.argv.slice(2);
+  const flagIndex = args.indexOf("--idle-exit");
+  if (flagIndex !== -1 && args[flagIndex + 1]) {
+    return args[flagIndex + 1];
+  }
+  const inline = args.find((arg) => arg.startsWith("--idle-exit="));
+  if (inline) {
+    return inline.slice("--idle-exit=".length);
+  }
+  return process.env.TGCLI_IDLE_EXIT ?? null;
+}
+
+// Resolve the idle-exit window to milliseconds. The CLI forwards `--idle-exit`
+// as a plain integer of milliseconds (it has already parsed the user's duration
+// via parseDuration), so a bare integer here is treated AS-IS as ms. A value
+// carrying a unit suffix (e.g. "60s", "5m" from TGCLI_IDLE_EXIT) is parsed with
+// the shared parseDuration (where a bare number would mean seconds, but that
+// branch never applies here because bare integers are short-circuited above).
+// This explicit split avoids the previous accidental divergence where the same
+// bare number meant seconds in the CLI but milliseconds in the server.
+function resolveIdleExitMs(value) {
+  if (value === null || value === undefined || value === "") {
+    return 0;
+  }
+  const raw = String(value).trim();
+  if (/^\d+$/.test(raw)) {
+    return Number(raw);
+  }
+  try {
+    return parseDuration(raw) ?? 0;
+  } catch (error) {
+    return 0;
+  }
+}
 
 function readVersion() {
   try {
@@ -1812,25 +1876,8 @@ async function ensureSession(req, res, body) {
   return record;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req
-      .on("data", (chunk) => chunks.push(chunk))
-      .on("end", () => {
-        try {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          resolve(raw.length ? JSON.parse(raw) : {});
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .on("error", (error) => reject(error));
-  });
-}
-
 async function handlePost(req, res) {
-  const body = await readBody(req);
+  const body = await readJsonBody(req);
   const sessionRecord = await ensureSession(req, res, body);
   if (!sessionRecord) {
     return;
@@ -1993,6 +2040,81 @@ if (mcpEnabled) {
   console.log("[startup] MCP disabled; running sync-only service.");
 }
 
+// --- Always-on loopback control API (independent of mcp.enabled) ---
+if (controlEnabled) {
+  controlToken = generateControlToken();
+  const startedAt = serviceState.startedAt;
+  const handleControlRequest = createControlRequestHandler({
+    service: messageSyncService,
+    token: controlToken,
+    pid: process.pid,
+    version: serviceState.version,
+    startedAt,
+    onActivity: () => {
+      lastControlActivityAt = Date.now();
+    },
+    ensureLogin: () => telegramClient.ensureLogin(),
+  });
+
+  controlServer = http.createServer((req, res) => {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
+    void handleControlRequest(req, res);
+  });
+
+  controlServer.on("error", (error) => {
+    console.error(`[control] server error: ${error.message}`);
+  });
+
+  controlServer.listen(CONTROL_PORT, CONTROL_HOST, () => {
+    const address = controlServer.address();
+    const boundPort = typeof address === "object" && address ? address.port : CONTROL_PORT;
+    try {
+      writeControlFile(storeDir, {
+        pid: process.pid,
+        port: boundPort,
+        token: controlToken,
+        startedAt,
+        version: serviceState.version,
+      });
+    } catch (error) {
+      console.error(`[control] failed to write control.json: ${error?.message ?? error}`);
+    }
+    console.log(`[startup] control API listening on http://${CONTROL_HOST}:${boundPort}/control`);
+  });
+
+  updateServiceState({
+    controlEnabled: true,
+    controlHost: CONTROL_HOST,
+    controlPort: CONTROL_PORT,
+  });
+}
+
+// --- Idle-exit monitor (active only when --idle-exit is configured) ---
+if (IDLE_EXIT_MS > 0) {
+  idleTimer = setInterval(() => {
+    if (shuttingDown) {
+      return;
+    }
+    const idle = isIdle({
+      jobCounts: messageSyncService.getJobCounts(),
+      watchedCount: messageSyncService.getWatchedChannelCount(),
+      lastActivityAt: lastControlActivityAt,
+      now: Date.now(),
+      idleExitMs: IDLE_EXIT_MS,
+    });
+    if (idle) {
+      console.log("[shutdown] idle window elapsed with no work; exiting.");
+      void shutdown().finally(() => process.exit(0));
+    }
+  }, IDLE_CHECK_INTERVAL_MS);
+  if (typeof idleTimer.unref === "function") {
+    idleTimer.unref();
+  }
+}
+
 async function shutdown() {
   if (shuttingDown) {
     return;
@@ -2014,6 +2136,27 @@ async function shutdown() {
     httpServer.close(() => {
       console.log("[shutdown] HTTP server closed");
     });
+  }
+
+  if (idleTimer) {
+    clearInterval(idleTimer);
+    idleTimer = null;
+  }
+
+  if (controlServer) {
+    controlServer.closeAllConnections?.();
+    controlServer.close(() => {
+      console.log("[shutdown] control server closed");
+    });
+    controlServer = null;
+  }
+
+  if (controlEnabled) {
+    try {
+      removeControlFile(storeDir);
+    } catch (error) {
+      console.error(`[shutdown] failed to remove control.json: ${error?.message ?? error}`);
+    }
   }
 
   try {
