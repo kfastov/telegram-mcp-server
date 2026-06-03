@@ -23,9 +23,36 @@ MCP: disabled by default (set `mcp.enabled` in config.json to true to serve MCP)
 - auth logout
 
 ## backfill
-- backfill (alias: `sync`)
+Backfill work is executed by the always-on control server, not in the CLI
+process. Commands that need the server (`backfill --chat`, `backfill wait`)
+auto-start `tgcli server --idle-exit 60s` in the background if one isn't already
+running, talk to it over the loopback control API, and the server shuts itself
+down once the queue drains and nothing is watched. The CLI stays a thin,
+one-shot client.
+
+- backfill --chat <id|username> [--depth N] [--min-date ISO] [--background]
+  - Enqueue a single-chat backfill on the server (auto-starting it).
+  - Foreground (default): follows progress to terminal, printing
+    `Backfilling <title>: <done>/<target> (NN%)` to stderr (suppressed by
+    `--quiet`) and a final summary on stdout. Exits non-zero if the job errors.
+  - **Ctrl-C detaches** instead of cancelling: it prints a note and exits 0; the
+    server keeps draining the job. Use `backfill cancel --chat <id>` to stop it.
+  - `--background`: enqueue and return immediately, printing `{ jobId, channelId,
+    status }` (one human line, or JSON with `--json`).
+  - Long-running: no default timeout (a user-supplied `--timeout` is honored).
+- backfill status [--json]
+  - Snapshot: queue counts, whether the server is up, and each in-progress /
+    pending backfill (title, message_count/target, %, cursor date, updated_at).
+- backfill count [--json]
+  - Print the number of in-progress backfills (cheap; brief read lock).
+- backfill wait [--json]
+  - Auto-start the server if needed, then block until no pending/in-progress
+    backfills remain, showing progress (respects `--quiet`).
+- backfill cancel --chat <id|username>
+  - Cancel a chat's backfills via the server when one is up; falls back to a
+    direct cancel (same as `backfill jobs cancel --channel`) when none is.
+- backfill (no --chat): legacy in-process sync (alias: `sync`)
   - Flags: --once | --follow, --idle-exit 30s, --download-media, --refresh-contacts, --refresh-groups
-- backfill status
 - backfill jobs list [--status] [--limit] [--channel]
 - backfill jobs add --chat <id|username> [--min-date ISO] [--depth N]
 - backfill jobs retry [--job-id] [--channel] [--all-errors]

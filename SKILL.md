@@ -59,13 +59,24 @@ tgcli send text --to @username --message "Hello"
 
 ### Backfill & Service
 ```bash
-tgcli channels watch --chat @channel   # subscribe a chat for archiving (queues a backfill)
-tgcli backfill --follow                 # `sync` remains a silent alias of `backfill`
-tgcli backfill jobs add --chat @channel --min-date 2024-01-01T00:00:00Z
-tgcli channels unwatch --chat @channel  # stop archiving a chat
+tgcli backfill --chat @channel                 # backfill one chat (auto-starts the server, follows progress)
+tgcli backfill --chat @channel --background    # enqueue and return the job id
+tgcli backfill --chat @channel --depth 5000 --min-date 2024-01-01T00:00:00Z
+tgcli backfill status                          # active backfills + server status
+tgcli backfill count                           # number of in-progress backfills
+tgcli backfill wait                            # block until the queue drains
+tgcli backfill cancel --chat @channel          # stop a chat's backfills
+tgcli channels watch --chat @channel           # subscribe a chat for archiving (queues a backfill)
+tgcli channels unwatch --chat @channel         # stop archiving a chat
+tgcli backfill --follow                         # legacy in-process sync (`sync` is a silent alias)
 tgcli service install
 tgcli service start
 ```
+
+Backfill work runs in the always-on control server, not the CLI. `backfill --chat`
+and `backfill wait` auto-start `tgcli server` in the background if needed; it
+shuts itself down once idle. Foreground `backfill --chat` follows progress on
+stderr; **Ctrl-C detaches** (the job keeps running — check `tgcli backfill status`).
 
 ### Contacts & Groups
 ```bash
