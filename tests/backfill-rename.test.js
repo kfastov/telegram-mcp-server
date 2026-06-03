@@ -51,6 +51,7 @@ function makeFakeServices(overrides = {}) {
     })),
     processQueue: vi.fn(),
     shutdown: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   return { telegramClient, messageSyncService };

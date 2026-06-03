@@ -155,6 +155,7 @@ function makeFakeServices({ sendImpl, refreshImpl } = {}) {
     resumePendingJobs: vi.fn(),
     getQueueStats: vi.fn(() => ({ pending: 0, in_progress: 0, processing: false })),
     shutdown: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
   };
   return { telegramClient, messageSyncService };
 }
