@@ -36,7 +36,7 @@ function createMockServices(messageId = 321) {
     destroy: vi.fn().mockResolvedValue(undefined),
   };
   const messageSyncService = {
-    shutdown: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
   };
   createServices.mockReturnValue({ telegramClient, messageSyncService });
   return { telegramClient, messageSyncService };
@@ -131,7 +131,7 @@ tgcli v2.0.8 | linux | v24.0.0`);
       ok: true,
       messageId: 654,
     });
-    expect(messageSyncService.shutdown).toHaveBeenCalledTimes(1);
+    expect(messageSyncService.close).toHaveBeenCalledTimes(1);
     expect(telegramClient.destroy).toHaveBeenCalledTimes(1);
   });
 

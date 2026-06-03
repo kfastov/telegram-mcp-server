@@ -1505,7 +1505,7 @@ async function runAuthStatus(globalFlags) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
     }
   }, timeoutMs);
@@ -1536,7 +1536,7 @@ async function runAuthLogout(globalFlags) {
         console.log('Logged out.');
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -1728,7 +1728,7 @@ async function runFeedback(globalFlags, messageParts, options = {}) {
       }
     } finally {
       if (messageSyncService) {
-        await messageSyncService.shutdown();
+        await messageSyncService.close();
       }
       if (telegramClient) {
         await telegramClient.destroy();
@@ -1937,7 +1937,7 @@ async function runBackfillCancel(globalFlags, options = {}) {
       try {
         result = messageSyncService.cancelJobs({ channelId: options.chat });
       } finally {
-        await messageSyncService.shutdown();
+        await messageSyncService.close();
         await telegramClient.destroy();
         release();
       }
@@ -2459,7 +2459,7 @@ async function runSyncJobsList(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
     }
   }, timeoutMs);
@@ -2560,7 +2560,7 @@ async function runSyncJobsCancel(globalFlags, options = {}) {
         console.log(`Canceled ${result.canceled} job(s).`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -2612,7 +2612,7 @@ async function runDoctor(globalFlags, options = {}) {
       console.log(`FTS: ${payload.ftsEnabled}${payload.ftsVersion ? ` (v${payload.ftsVersion})` : ''}`);
       console.log(`QUEUE: pending=${queue.pending} in_progress=${queue.in_progress} idle=${queue.idle} error=${queue.error}`);
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
     }
   }, timeoutMs);
@@ -2642,7 +2642,7 @@ async function runChannelsList(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -2691,7 +2691,7 @@ async function runChannelsShow(globalFlags, options = {}) {
         console.log(JSON.stringify(channel, null, 2));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -2750,7 +2750,7 @@ async function runChannelsSync(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -2784,7 +2784,7 @@ async function runChannelsMarkRead(globalFlags, options = {}) {
         console.log(`Marked channel ${result.channelId} as read up to message ${result.messageId}.`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -2933,7 +2933,7 @@ async function runMessagesList(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3124,7 +3124,7 @@ async function runMessagesSearch(globalFlags, queryParts, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3207,7 +3207,7 @@ async function runMessagesShow(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3324,7 +3324,7 @@ async function runMessagesContext(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3447,7 +3447,7 @@ async function runSendText(globalFlags, options = {}) {
           console.log(`Message sent (${result.messageId}).`);
         }
       } finally {
-        await messageSyncService.shutdown();
+        await messageSyncService.close();
         await telegramClient.destroy();
         release();
       }
@@ -3513,7 +3513,7 @@ async function runSendPhoto(globalFlags, options = {}) {
           console.log(`Photo sent (${result.messageId}).`);
         }
       } finally {
-        await messageSyncService.shutdown();
+        await messageSyncService.close();
         await telegramClient.destroy();
         release();
       }
@@ -3582,7 +3582,7 @@ async function runSendFile(globalFlags, options = {}) {
           console.log(`File sent (${result.messageId}).`);
         }
       } finally {
-        await messageSyncService.shutdown();
+        await messageSyncService.close();
         await telegramClient.destroy();
         release();
       }
@@ -3621,7 +3621,7 @@ async function runMediaDownload(globalFlags, options = {}) {
         console.log(`Downloaded to ${result.path} (${result.bytes} bytes).`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3654,7 +3654,7 @@ async function runTopicsList(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3693,7 +3693,7 @@ async function runTopicsSearch(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3727,7 +3727,7 @@ async function runTagsSet(globalFlags, options = {}) {
         console.log(`Tags set for ${options.chat}: ${finalTags.join(', ')}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3751,7 +3751,7 @@ async function runTagsList(globalFlags, options = {}) {
         console.log(tags.map((tag) => tag.tag).join(', '));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3782,7 +3782,7 @@ async function runTagsSearch(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3815,7 +3815,7 @@ async function runTagsAuto(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3857,7 +3857,7 @@ async function runMetadataGet(globalFlags, options = {}) {
         console.log(JSON.stringify(metadata, null, 2));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3889,7 +3889,7 @@ async function runMetadataRefresh(globalFlags, options = {}) {
         console.log(JSON.stringify(results, null, 2));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3925,7 +3925,7 @@ async function runContactsSearch(globalFlags, queryParts, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3961,7 +3961,7 @@ async function runContactsShow(globalFlags, options = {}) {
         console.log(JSON.stringify(contact, null, 2));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -3989,7 +3989,7 @@ async function runContactsAliasSet(globalFlags, options = {}) {
         console.log(`Alias set for ${options.user}: ${alias}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4014,7 +4014,7 @@ async function runContactsAliasRm(globalFlags, options = {}) {
         console.log(`Alias removed for ${options.user}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4043,7 +4043,7 @@ async function runContactsTagsAdd(globalFlags, options = {}) {
         console.log(`Tags updated for ${options.user}: ${updated.join(', ')}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4072,7 +4072,7 @@ async function runContactsTagsRm(globalFlags, options = {}) {
         console.log(`Tags updated for ${options.user}: ${updated.join(', ')}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4100,7 +4100,7 @@ async function runContactsNotesSet(globalFlags, options = {}) {
         console.log(`Notes updated for ${options.user}.`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4131,7 +4131,7 @@ async function runGroupsList(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4159,7 +4159,7 @@ async function runGroupsInfo(globalFlags, options = {}) {
         console.log(JSON.stringify(info, null, 2));
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4190,7 +4190,7 @@ async function runGroupsRename(globalFlags, options = {}) {
         console.log(`Group renamed: ${options.name}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4224,7 +4224,7 @@ async function runGroupMembersAdd(globalFlags, options = {}) {
         console.log('Members added.');
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4259,7 +4259,7 @@ async function runGroupMembersRemove(globalFlags, options = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4287,7 +4287,7 @@ async function runGroupInviteLinkGet(globalFlags, options = {}) {
         console.log(link.link);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4316,7 +4316,7 @@ async function runGroupInviteLinkRevoke(globalFlags, options = {}) {
         console.log(link.link);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4352,7 +4352,7 @@ async function runGroupsJoin(globalFlags, options = {}) {
         console.log(`Joined: ${chat.displayName || chat.title || 'Unknown'}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4380,7 +4380,7 @@ async function runGroupsLeave(globalFlags, options = {}) {
         console.log(`Left ${options.chat}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4408,7 +4408,7 @@ async function runFoldersList(globalFlags) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4471,7 +4471,7 @@ async function runFoldersShow(globalFlags, folder, opts = {}) {
         }
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4510,7 +4510,7 @@ async function runFoldersCreate(globalFlags, options) {
         console.log(`Created folder: ${result.title} (id=${result.id})`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4549,7 +4549,7 @@ async function runFoldersEdit(globalFlags, folder, options) {
         console.log(`Updated folder: ${result.title} (id=${result.id})`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4573,7 +4573,7 @@ async function runFoldersDelete(globalFlags, folder) {
         console.log(`Deleted folder id=${result.id}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4598,7 +4598,7 @@ async function runFoldersReorder(globalFlags, options) {
         console.log('Folders reordered');
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4623,7 +4623,7 @@ async function runFoldersChatsAdd(globalFlags, folder, options) {
         console.log(`Chat added to folder id=${result.folderId}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4648,7 +4648,7 @@ async function runFoldersChatsRemove(globalFlags, folder, options) {
         console.log(`Chat removed from folder id=${result.folderId}`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }
@@ -4672,7 +4672,7 @@ async function runFoldersJoin(globalFlags, link) {
         console.log(`Joined folder: ${result.title} (id=${result.id})`);
       }
     } finally {
-      await messageSyncService.shutdown();
+      await messageSyncService.close();
       await telegramClient.destroy();
       release();
     }

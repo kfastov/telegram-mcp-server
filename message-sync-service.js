@@ -545,6 +545,10 @@ export default class MessageSyncService {
     this.realtimeActive = false;
     this.realtimeHandlers = null;
     this.unsubscribeChannelTooLong = null;
+    // Id of the job this instance set to `in_progress` while running the queue.
+    // Only the queue worker owns its in-flight job; `shutdown()` requeues just
+    // this one so it resumes next run, without touching jobs other processes own.
+    this.ownedInProgressJobId = null;
 
     this._initDatabase();
   }
@@ -2090,6 +2094,10 @@ export default class MessageSyncService {
     void this.processQueue();
   }
 
+  // Worker-only teardown. Stops the queue loop, requeues *only* the job this
+  // instance left in_progress (so the worker resumes it next run), then releases
+  // resources via close(). Jobs owned by other processes are never touched.
+  // Non-worker commands must call close() instead — see #42.
   async shutdown() {
     this.stopRequested = true;
 
@@ -2097,14 +2105,23 @@ export default class MessageSyncService {
       await delay(100);
     }
 
-    if (this.db && this.db.open) {
+    if (this.ownedInProgressJobId !== null && this.db && this.db.open) {
       this.db.prepare(`
         UPDATE jobs
         SET status = ?, error = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE status = ?
-      `).run(JOB_STATUS.PENDING, JOB_STATUS.IN_PROGRESS);
+        WHERE id = ? AND status = ?
+      `).run(JOB_STATUS.PENDING, this.ownedInProgressJobId, JOB_STATUS.IN_PROGRESS);
+      this.ownedInProgressJobId = null;
     }
 
+    this.close();
+  }
+
+  // Non-mutating teardown for any process that isn't the queue worker. Removes
+  // realtime handlers (if registered) and closes the DB handle, but never touches
+  // the `jobs` table — so a read-only command run against a live server's store
+  // cannot corrupt the server's in-progress job (#42).
+  close() {
     if (this.realtimeActive && this.realtimeHandlers) {
       this.telegramClient.client.onNewMessage.remove(this.realtimeHandlers.newMessageHandler);
       this.telegramClient.client.onEditMessage.remove(this.realtimeHandlers.editMessageHandler);
@@ -2714,6 +2731,9 @@ export default class MessageSyncService {
     }
 
     this._updateJobStatus(job.id, JOB_STATUS.IN_PROGRESS);
+    // Claim ownership so shutdown() requeues this job (and only this one) if the
+    // process exits before _processJob writes its terminal/pending status.
+    this.ownedInProgressJobId = job.id;
 
     try {
       const channelId = normalizeChannelKey(job.channel_id);
@@ -2762,6 +2782,11 @@ export default class MessageSyncService {
       } else {
         this._markJobError(job.id, error);
       }
+    } finally {
+      // _processJob always writes a non-in_progress status above before
+      // returning, so releasing ownership here is safe. If the process is
+      // killed mid-await instead, ownership is still set and shutdown() requeues.
+      this.ownedInProgressJobId = null;
     }
   }
 
