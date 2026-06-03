@@ -30,7 +30,7 @@ function resolveRuntimePaths(options = {}) {
   };
 }
 
-function resolveValidatedConfig(options = {}, resolvedStoreDir = null) {
+export function resolveValidatedConfig(options = {}, resolvedStoreDir = null) {
   const loadedConfig = options.config ?? (resolvedStoreDir ? loadConfig(resolvedStoreDir).config : null);
   const config = normalizeConfig(loadedConfig ?? {});
   const missing = validateConfig(config);
