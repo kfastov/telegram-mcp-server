@@ -12,6 +12,9 @@ const services = vi.hoisted(() => ({ current: null }));
 
 vi.mock('../core/services.js', () => ({
   createServices: vi.fn(() => services.current),
+  // withCommand builds only the needed half via these granular factories.
+  createTelegramClient: vi.fn(() => ({ telegramClient: services.current.telegramClient })),
+  createMessageSyncService: vi.fn(() => ({ messageSyncService: services.current.messageSyncService })),
 }));
 
 vi.mock('../store-lock.js', () => ({
