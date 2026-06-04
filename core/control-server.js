@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 
 import { readJsonBody, sendJson } from './http-util.js';
+import { OPERATIONS } from './operations.js';
 
 export const CONTROL_FILE = 'control.json';
 export const CONTROL_TOKEN_HEADER = 'x-tgcli-control-token';
@@ -61,6 +62,9 @@ export function isIdle({ jobCounts, watchedCount, lastActivityAt, now, idleExitM
  *
  * @param {object} deps
  * @param {object} deps.service       MessageSyncService (or compatible stub).
+ * @param {object} [deps.warmServices] Warm { telegramClient, messageSyncService }
+ *                                     the shared operation handlers run against
+ *                                     for /control/invoke.
  * @param {string} deps.token         Secret required in the control token header.
  * @param {number} deps.pid           Server process id.
  * @param {string} deps.version       Server version string.
@@ -70,6 +74,7 @@ export function isIdle({ jobCounts, watchedCount, lastActivityAt, now, idleExitM
  */
 export function createControlRequestHandler({
   service,
+  warmServices,
   token,
   pid,
   version,
@@ -132,6 +137,24 @@ export function createControlRequestHandler({
           channelId: job?.channel_id ?? null,
           status: job?.status ?? null,
         });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/control/invoke') {
+        const body = await readJsonBody(req);
+        const op = body?.op;
+        const handler = typeof op === 'string' ? OPERATIONS[op] : undefined;
+        if (!handler) {
+          sendJson(res, 400, { error: `Unknown operation: ${op ?? ''}` });
+          return;
+        }
+        // The warm client serves these reads, so make sure it is logged in
+        // before the handler touches MTProto.
+        if (typeof ensureLogin === 'function') {
+          await ensureLogin();
+        }
+        const result = await handler(warmServices, body?.args ?? {});
+        sendJson(res, 200, { result });
         return;
       }
 

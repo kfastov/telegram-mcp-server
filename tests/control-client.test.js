@@ -15,6 +15,7 @@ import {
   cancelBackfill,
   enqueueBackfill,
   ensureServer,
+  invoke,
   pingServer,
   readControlFile,
 } from '../core/control-client.js';
@@ -118,6 +119,28 @@ describe('enqueueBackfill / cancelBackfill', () => {
     const [url, init] = global.fetch.mock.calls[0];
     expect(url).toBe('http://127.0.0.1:8765/control/cancel');
     expect(JSON.parse(init.body)).toEqual({ chatId: '@c', jobId: undefined });
+  });
+});
+
+describe('invoke', () => {
+  beforeEach(() => {
+    writeControl({ pid: 9, port: 8765, token: 'secret', startedAt: 's', version: '2' });
+  });
+
+  it('POSTs { op, args } to /control/invoke and returns result', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(200, { result: [{ id: '1' }] }));
+    const result = await invoke(storeDir, { op: 'listChannels', args: { limit: 5 } });
+    expect(result).toEqual([{ id: '1' }]);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:8765/control/invoke');
+    expect(init.method).toBe('POST');
+    expect(init.headers[CONTROL_TOKEN_HEADER]).toBe('secret');
+    expect(JSON.parse(init.body)).toEqual({ op: 'listChannels', args: { limit: 5 } });
+  });
+
+  it('throws the server error message on a non-200 response', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(400, { error: 'Unknown operation: nope' }));
+    await expect(invoke(storeDir, { op: 'nope', args: {} })).rejects.toThrow('Unknown operation: nope');
   });
 });
 

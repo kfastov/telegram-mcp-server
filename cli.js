@@ -11,7 +11,7 @@ import { Command, Option } from 'commander';
 import { acquireStoreLock, acquireReadLock, readStoreLock } from './store-lock.js';
 import { loadConfig, normalizeConfig, saveConfig, validateConfig } from './core/config.js';
 import { createMessageSyncService, createServices, createTelegramClient } from './core/services.js';
-import { withCommand, runWithTimeout } from './core/command-context.js';
+import { withCommand, runWithTimeout, runOperation } from './core/command-context.js';
 import {
   buildSendErrorPayload,
   buildSendSuccessPayload,
@@ -2551,24 +2551,23 @@ async function runDoctor(globalFlags, options = {}) {
 }
 
 async function runChannelsList(globalFlags, options = {}) {
-  return withCommand(globalFlags, { need: 'full', lock: 'read' }, async ({ telegramClient, messageSyncService }) => {
-    const limit = parsePositiveInt(options.limit, '--limit') ?? 50;
-    if (!(await telegramClient.isAuthorized().catch(() => false))) {
-      throw new Error('Not authenticated. Run `node cli.js auth` first.');
-    }
-    const dialogs = options.query
-      ? await telegramClient.searchDialogs(options.query, limit)
-      : await telegramClient.listDialogs(limit);
-
-    if (globalFlags.json) {
-      writeJson(dialogs);
-    } else {
-      for (const dialog of dialogs) {
-        const label = dialog.title || dialog.username || dialog.id;
-        console.log(`${label} (${dialog.id})`);
-      }
-    }
+  const limit = parsePositiveInt(options.limit, '--limit') ?? 50;
+  const dialogs = await runOperation(globalFlags, {
+    op: 'listChannels',
+    args: { query: options.query, limit },
+    need: 'full',
+    lock: 'read',
+    requireAuth: true,
   });
+
+  if (globalFlags.json) {
+    writeJson(dialogs);
+  } else {
+    for (const dialog of dialogs) {
+      const label = dialog.title || dialog.username || dialog.id;
+      console.log(`${label} (${dialog.id})`);
+    }
+  }
 }
 
 async function runChannelsShow(globalFlags, options = {}) {
@@ -3879,17 +3878,18 @@ async function runGroupInviteLinkGet(globalFlags, options = {}) {
   if (!options.chat) {
     throw new Error('--chat is required');
   }
-  return withCommand(globalFlags, { need: 'telegram', lock: 'read' }, async ({ telegramClient }) => {
-    if (!(await telegramClient.isAuthorized().catch(() => false))) {
-      throw new Error('Not authenticated. Run `node cli.js auth` first.');
-    }
-    const link = await telegramClient.getGroupInviteLink(options.chat);
-    if (globalFlags.json) {
-      writeJson({ link: link.link });
-    } else {
-      console.log(link.link);
-    }
+  const link = await runOperation(globalFlags, {
+    op: 'getGroupInviteLink',
+    args: { chat: options.chat },
+    need: 'telegram',
+    lock: 'read',
+    requireAuth: true,
   });
+  if (globalFlags.json) {
+    writeJson({ link: link.link });
+  } else {
+    console.log(link.link);
+  }
 }
 
 async function runGroupInviteLinkRevoke(globalFlags, options = {}) {

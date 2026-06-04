@@ -123,6 +123,25 @@ export async function cancelBackfill(storeDir, { chatId, jobId } = {}) {
   return json;
 }
 
+// POST /control/invoke { op, args } → the operation's result. Runs the shared
+// operation handler against the server's warm services and returns `result`.
+// Throws on a non-2xx response so the caller surfaces the server's error.
+export async function invoke(storeDir, { op, args } = {}) {
+  const control = readControlFile(storeDir);
+  if (!control) {
+    throw new Error('No control server is running.');
+  }
+  const { status, json } = await controlFetch(control, '/control/invoke', {
+    method: 'POST',
+    body: { op, args },
+    timeoutMs: ENQUEUE_TIMEOUT_MS,
+  });
+  if (status !== 200) {
+    throw new Error(json?.error ?? `Operation failed (HTTP ${status})`);
+  }
+  return json?.result;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
