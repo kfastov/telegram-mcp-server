@@ -2,13 +2,26 @@
 
 CLI goal: human-readable output by default with --json for scripting.
 
+## Execution model
+Every Telegram and archive command (channels, messages, send, media, topics,
+tags, metadata, contacts, groups, folders) runs through the always-on control
+server, not in the CLI process. The CLI is a thin one-shot client: it auto-starts
+`tgcli server --idle-exit 60s` in the background when one isn't already running,
+asks it to execute the operation against its warm (already-authed) MTProto
+connection and open database over the loopback control API, then renders the
+result. The server is the single writer; the auto-started server shuts itself
+down once the queue drains and nothing is watched.
+
+Commands that stay local (no server): `config`, `service`, `doctor`, and `auth`
+(interactive login bootstraps the session the server then uses).
+
 ## Global flags
 - --json
 - --timeout DURATION
   - No default for most commands (long-running ones like `backfill`, `--follow`, and `server` stay unbounded).
   - `send` commands default to `30s` so agents/scripts never hang on a stuck connection. Override with `--timeout 5m`, or `--timeout 0` to disable.
 - --quiet
-  - Suppress informational progress/status output on stderr (e.g. the `Connecting to Telegram…` note from `send`). Errors and primary stdout/`--json` output are unaffected.
+  - Suppress informational progress/status output on stderr (e.g. backfill progress lines). Errors and primary stdout/`--json` output are unaffected.
 - --version
 
 Store location: OS app data dir (override with TGCLI_STORE).
@@ -138,9 +151,10 @@ Legacy `--offset-id` is accepted as a hidden alias for `--before-id`.
 - send text --to <id|username> --message "..." [--topic <id>] [--parse-mode markdown|html|none] [--reply-to <id>] [--schedule <iso>] [--silent] [--no-preview] [--no-forwards] [--retries <n>] [--retry-backoff constant|linear|exponential|<ms>]
 - send photo --to <id|username> --photo PATH [--caption "..."] [--topic <id>] [--parse-mode markdown|html|none] [--reply-to <id>] [--schedule <iso>] [--silent] [--no-forwards] [--spoiler] [--caption-above] [--retries <n>] [--retry-backoff constant|linear|exponential|<ms>]
 - send file --to <id|username> --file PATH [--caption "..."] [--filename NAME] [--topic <id>] [--parse-mode markdown|html|none] [--reply-to <id>] [--schedule <iso>] [--silent] [--no-forwards] [--spoiler] [--caption-above] [--force-document] [--retries <n>] [--retry-backoff constant|linear|exponential|<ms>]
-  - `--retries` defaults to `2` for all send commands.
-  - Send commands default to a `30s` wall-clock timeout so a stuck Telegram connection fails fast instead of hanging. Override with `--timeout <duration>` (e.g. `--timeout 5m`) or disable with `--timeout 0`. On timeout the command exits non-zero with: `Send timed out after 30s (no response from Telegram).`
-  - If Telegram returns a `FLOOD_WAIT` whose required wait exceeds the remaining timeout budget, the command aborts early reporting the rate limit (e.g. `Telegram rate-limited this send (FLOOD_WAIT 120s), which exceeds the 30s timeout.`) rather than silently timing out. Retry later or pass `--timeout 0`.
+  - Sends are executed by the warm server (the single writer): the CLI routes the send through the control server, which runs the retry/`FLOOD_WAIT` logic against its live connection.
+  - `--retries` defaults to `2` for all send commands. Retries and `FLOOD_WAIT` waits happen server-side.
+  - Send commands default to a `30s` wall-clock timeout, which bounds the CLI's wait on the server. A stuck send fails fast instead of hanging. Override with `--timeout <duration>` (e.g. `--timeout 5m`) or disable with `--timeout 0`. On timeout the command exits non-zero with: `Send timed out after 30s (no response from Telegram).`
+  - If Telegram returns a `FLOOD_WAIT` whose required wait exceeds the timeout budget, the command reports the rate limit (e.g. `Telegram rate-limited this send (FLOOD_WAIT 120s), which exceeds the 30s timeout.`) rather than silently timing out. Retry later or pass `--timeout 0`.
 
 ## media
 - media download --chat <id|username> --id <msgId> [--output PATH]

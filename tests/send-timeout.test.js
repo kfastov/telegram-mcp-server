@@ -9,12 +9,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // network, filesystem, or auth side effects.
 
 const services = vi.hoisted(() => ({ current: null }));
+const control = vi.hoisted(() => ({ ensureServer: null, invoke: null }));
 
 vi.mock('../core/services.js', () => ({
   createServices: vi.fn(() => services.current),
   // withCommand builds only the needed half via these granular factories.
   createTelegramClient: vi.fn(() => ({ telegramClient: services.current.telegramClient })),
   createMessageSyncService: vi.fn(() => ({ messageSyncService: services.current.messageSyncService })),
+}));
+
+// Send commands route through the warm server (ensureServer + invoke). The CLI's
+// timeoutMs bounds its wait on invoke; modeling that wait here lets us assert the
+// CLI surfaces a clear send-timeout without any real process or network.
+vi.mock('../core/control-client.js', () => ({
+  ensureServer: (...args) => control.ensureServer(...args),
+  invoke: (...args) => control.invoke(...args),
+  pingServer: vi.fn(),
+  enqueueBackfill: vi.fn(),
+  cancelBackfill: vi.fn(),
 }));
 
 vi.mock('../store-lock.js', () => ({
@@ -146,10 +158,9 @@ describe('executeSendWithRetries FLOOD_WAIT budget handling', () => {
 
 // --- CLI integration: scoped default timeout -----------------------------
 
-function makeFakeServices({ sendImpl, refreshImpl } = {}) {
+function makeFakeServices({ refreshImpl } = {}) {
   const telegramClient = {
     isAuthorized: vi.fn().mockResolvedValue(true),
-    sendTextMessage: vi.fn(sendImpl ?? (async () => ({ messageId: 1 }))),
     startUpdates: vi.fn().mockResolvedValue(undefined),
     destroy: vi.fn().mockResolvedValue(undefined),
   };
@@ -163,6 +174,27 @@ function makeFakeServices({ sendImpl, refreshImpl } = {}) {
   return { telegramClient, messageSyncService };
 }
 
+// Model the warm server's send execution behind invoke: a hanging send rejects
+// with a TimeoutError once the CLI's invoke timeoutMs elapses (mirroring
+// AbortSignal.timeout aborting the real request); a normal send resolves with the
+// op's { result, attempts } shape.
+function makeInvoke({ resultMessageId, hang = false } = {}) {
+  return vi.fn((_storeDir, { timeoutMs } = {}) => new Promise((resolve, reject) => {
+    if (hang) {
+      if (timeoutMs && timeoutMs > 0) {
+        setTimeout(() => {
+          const error = new Error('The operation was aborted due to timeout');
+          error.name = 'TimeoutError';
+          reject(error);
+        }, timeoutMs);
+      }
+      // timeoutMs === 0 (--timeout 0): never settle.
+      return;
+    }
+    resolve({ result: { messageId: resultMessageId }, attempts: 1 });
+  }));
+}
+
 describe('send command default timeout (CLI integration)', () => {
   let logSpy;
   let errSpy;
@@ -174,6 +206,7 @@ describe('send command default timeout (CLI integration)', () => {
     errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitCode = process.exitCode;
     process.exitCode = undefined;
+    control.ensureServer = vi.fn().mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
@@ -191,13 +224,11 @@ describe('send command default timeout (CLI integration)', () => {
   }
 
   it('(a) times out a hanging send after the 30s default when no --timeout is given', async () => {
-    // sendTextMessage never resolves -> the only thing that can end the command
-    // is the default timeout.
-    services.current = makeFakeServices({ sendImpl: () => new Promise(() => {}) });
+    control.invoke = makeInvoke({ hang: true });
 
     const done = runProgram(['send', 'text', '--to', '@x', '--message', 'hi']);
 
-    // Let the async work reach the hanging send, then cross the 30s boundary.
+    // Let the async work reach the hanging invoke, then cross the 30s boundary.
     await vi.advanceTimersByTimeAsync(29000);
     expect(process.exitCode).toBeUndefined();
     await vi.advanceTimersByTimeAsync(2000);
@@ -206,11 +237,10 @@ describe('send command default timeout (CLI integration)', () => {
     expect(process.exitCode).toBe(1);
     const stderrText = errSpy.mock.calls.map((c) => c[0]).join('');
     expect(stderrText).toContain('Send timed out after 30s');
-    expect(stderrText).toContain('Connecting to Telegram');
   });
 
   it('(d) honors an explicit --timeout value', async () => {
-    services.current = makeFakeServices({ sendImpl: () => new Promise(() => {}) });
+    control.invoke = makeInvoke({ hang: true });
 
     const done = runProgram(['send', 'text', '--to', '@x', '--message', 'hi', '--timeout', '1s']);
 
@@ -223,10 +253,8 @@ describe('send command default timeout (CLI integration)', () => {
   });
 
   it('(c) --timeout 0 disables the timeout (send is unbounded)', async () => {
-    let resolveSend;
-    services.current = makeFakeServices({
-      sendImpl: () => new Promise((resolve) => { resolveSend = resolve; }),
-    });
+    let invokeResolve;
+    control.invoke = vi.fn(() => new Promise((resolve) => { invokeResolve = resolve; }));
 
     const done = runProgram(['send', 'text', '--to', '@x', '--message', 'hi', '--timeout', '0']);
 
@@ -235,11 +263,13 @@ describe('send command default timeout (CLI integration)', () => {
     expect(process.exitCode).toBeUndefined();
 
     // Now let the send finish and confirm success, not a timeout.
-    resolveSend({ messageId: 7 });
+    invokeResolve({ result: { messageId: 7 }, attempts: 1 });
     await done;
 
     expect(process.exitCode).toBeUndefined();
     expect(logSpy.mock.calls.flat().join(' ')).toContain('Message sent (7).');
+    // The CLI passes timeoutMs: 0 so its wait on invoke is unbounded.
+    expect(control.invoke.mock.calls[0][1].timeoutMs).toBe(0);
   });
 
   it('(b) a long-running command (sync) is NOT bounded by the send default', async () => {
@@ -262,26 +292,25 @@ describe('send command default timeout (CLI integration)', () => {
     void done;
   });
 
-  it('prints the Connecting status on stderr by default (no --quiet)', async () => {
-    services.current = makeFakeServices({ sendImpl: async () => ({ messageId: 11 }) });
+  it('passes the 30s default as the invoke timeout and prints success', async () => {
+    control.invoke = makeInvoke({ resultMessageId: 11 });
 
     await runProgram(['send', 'text', '--to', '@x', '--message', 'hi']);
 
     expect(process.exitCode).toBeUndefined();
-    const stderrText = errSpy.mock.calls.map((c) => c[0]).join('');
-    expect(stderrText).toContain('Connecting to Telegram');
+    expect(control.invoke).toHaveBeenCalledTimes(1);
+    expect(control.invoke.mock.calls[0][1].timeoutMs).toBe(DEFAULT_SEND_TIMEOUT_MS);
     expect(logSpy.mock.calls.flat().join(' ')).toContain('Message sent (11).');
   });
 
-  it('suppresses the Connecting status with --quiet', async () => {
-    services.current = makeFakeServices({ sendImpl: async () => ({ messageId: 12 }) });
+  it('honors --quiet without emitting the dropped connecting status', async () => {
+    control.invoke = makeInvoke({ resultMessageId: 12 });
 
     await runProgram(['send', 'text', '--to', '@x', '--message', 'hi', '--quiet']);
 
     expect(process.exitCode).toBeUndefined();
     const stderrText = errSpy.mock.calls.map((c) => c[0]).join('');
     expect(stderrText).not.toContain('Connecting to Telegram');
-    // Primary stdout/--json output is unaffected.
     expect(logSpy.mock.calls.flat().join(' ')).toContain('Message sent (12).');
   });
 });

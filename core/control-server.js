@@ -4,6 +4,7 @@ import crypto from 'crypto';
 
 import { readJsonBody, sendJson } from './http-util.js';
 import { OPERATIONS } from './operations.js';
+import { SendCommandError } from './send-utils.js';
 
 export const CONTROL_FILE = 'control.json';
 export const CONTROL_TOKEN_HEADER = 'x-tgcli-control-token';
@@ -148,13 +149,23 @@ export function createControlRequestHandler({
           sendJson(res, 400, { error: `Unknown operation: ${op ?? ''}` });
           return;
         }
-        // The warm client serves these reads, so make sure it is logged in
+        // The warm client serves these operations, so make sure it is logged in
         // before the handler touches MTProto.
         if (typeof ensureLogin === 'function') {
           await ensureLogin();
         }
-        const result = await handler(warmServices, body?.args ?? {});
-        sendJson(res, 200, { result });
+        try {
+          const result = await handler(warmServices, body?.args ?? {});
+          sendJson(res, 200, { result });
+        } catch (error) {
+          // A send op carries structured failure details; relay them so the CLI
+          // renders the same human/JSON error a local send would.
+          if (error instanceof SendCommandError) {
+            sendJson(res, 500, { error: error.message, sendError: error.details });
+          } else {
+            sendJson(res, 500, { error: error?.message ?? 'Operation failed' });
+          }
+        }
         return;
       }
 

@@ -182,7 +182,12 @@ describe('POST /control/invoke', () => {
         searchDialogs: vi.fn(() => Promise.resolve([])),
         getGroupInviteLink: vi.fn(() => Promise.resolve({ link: 'https://t.me/+warm' })),
       },
-      messageSyncService: {},
+      messageSyncService: {
+        setChannelSync: vi.fn(() => ({ channel_id: '@g', sync_enabled: 1 })),
+        listJobs: vi.fn(() => []),
+        addJob: vi.fn(() => ({ id: 5, status: 'pending' })),
+        processQueue: vi.fn(),
+      },
     };
     ensureLogin = vi.fn(() => Promise.resolve());
     const handler = createControlRequestHandler({
@@ -213,6 +218,28 @@ describe('POST /control/invoke', () => {
     expect(warmServices.telegramClient.listDialogs).toHaveBeenCalledWith(10);
     expect(json).toEqual({ result: [{ id: '1', title: 'Warm' }] });
     expect(ensureLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches a write op (channelSetSync) against the warm services', async () => {
+    const { status, json } = await request(port, 'POST', '/control/invoke', {
+      token: TOKEN,
+      body: { op: 'channelSetSync', args: { chat: '@g', enable: true } },
+    });
+    expect(status).toBe(200);
+    expect(warmServices.messageSyncService.setChannelSync).toHaveBeenCalledWith('@g', true);
+    expect(warmServices.messageSyncService.addJob).toHaveBeenCalledWith('@g');
+    expect(json.result).toMatchObject({ channelId: '@g', syncEnabled: true, jobId: 5, jobQueued: true });
+    expect(ensureLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 500 with a sendError payload when a send op fails', async () => {
+    warmServices.telegramClient.sendTextMessage = vi.fn(() => Promise.reject(new Error('FLOOD_WAIT_120')));
+    const { status, json } = await request(port, 'POST', '/control/invoke', {
+      token: TOKEN,
+      body: { op: 'sendText', args: { chat: '@g', text: 'hi', retries: 0, timeoutMs: 30000 } },
+    });
+    expect(status).toBe(500);
+    expect(json.sendError).toMatchObject({ type: 'rate_limit', method: 'sendText', waitSeconds: 120 });
   });
 
   it('returns 400 for an unknown op (no handler invoked)', async () => {

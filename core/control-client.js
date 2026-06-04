@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import { CONTROL_FILE, CONTROL_TOKEN_HEADER } from './control-server.js';
+import { SendCommandError } from './send-utils.js';
 
 // Path to this package's CLI, used to (re)spawn `tgcli server`.
 const CLI_ENTRYPOINT = fileURLToPath(new URL('../cli.js', import.meta.url));
@@ -125,18 +126,26 @@ export async function cancelBackfill(storeDir, { chatId, jobId } = {}) {
 
 // POST /control/invoke { op, args } → the operation's result. Runs the shared
 // operation handler against the server's warm services and returns `result`.
-// Throws on a non-2xx response so the caller surfaces the server's error.
-export async function invoke(storeDir, { op, args } = {}) {
+// timeoutMs bounds the request wait (defaults to the enqueue budget); a value of
+// 0 disables it. A send op that fails reports structured details under
+// `sendError`, which we re-throw as a SendCommandError so the CLI renders the
+// same human/JSON error as a local send would. Other non-2xx responses surface
+// the server's error message.
+export async function invoke(storeDir, { op, args, timeoutMs } = {}) {
   const control = readControlFile(storeDir);
   if (!control) {
     throw new Error('No control server is running.');
   }
+  const effectiveTimeoutMs = timeoutMs === undefined ? ENQUEUE_TIMEOUT_MS : timeoutMs;
   const { status, json } = await controlFetch(control, '/control/invoke', {
     method: 'POST',
     body: { op, args },
-    timeoutMs: ENQUEUE_TIMEOUT_MS,
+    timeoutMs: effectiveTimeoutMs > 0 ? effectiveTimeoutMs : undefined,
   });
   if (status !== 200) {
+    if (json?.sendError) {
+      throw new SendCommandError(json.sendError);
+    }
     throw new Error(json?.error ?? `Operation failed (HTTP ${status})`);
   }
   return json?.result;
