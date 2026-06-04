@@ -73,10 +73,14 @@ tgcli service install
 tgcli service start
 ```
 
-Backfill work runs in the always-on control server, not the CLI. `backfill --chat`
-and `backfill wait` auto-start `tgcli server` in the background if needed; it
-shuts itself down once idle. Foreground `backfill --chat` follows progress on
-stderr; **Ctrl-C detaches** (the job keeps running — check `tgcli backfill status`).
+Telegram and archive commands (channels, messages, send, media, topics, tags,
+metadata, contacts, groups, folders) run through the always-on control server,
+not the CLI. The CLI is a thin client: it auto-starts `tgcli server` in the
+background when one isn't running, has it execute the operation against its warm
+connection and database, then renders the result; the server shuts itself down
+once idle. `config`, `service`, `doctor`, and `auth` stay local. Foreground
+`backfill --chat` follows progress on stderr; **Ctrl-C detaches** (the job keeps
+running — check `tgcli backfill status`).
 
 ### Contacts & Groups
 ```bash

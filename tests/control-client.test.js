@@ -20,6 +20,7 @@ import {
   readControlFile,
 } from '../core/control-client.js';
 import { CONTROL_TOKEN_HEADER } from '../core/control-server.js';
+import { SendCommandError } from '../core/send-utils.js';
 
 let storeDir;
 
@@ -141,6 +142,23 @@ describe('invoke', () => {
   it('throws the server error message on a non-200 response', async () => {
     global.fetch.mockResolvedValue(jsonResponse(400, { error: 'Unknown operation: nope' }));
     await expect(invoke(storeDir, { op: 'nope', args: {} })).rejects.toThrow('Unknown operation: nope');
+  });
+
+  it('reconstructs a SendCommandError from a sendError payload', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(500, {
+      error: 'FLOOD_WAIT_120',
+      sendError: { type: 'rate_limit', method: 'sendText', message: 'FLOOD_WAIT_120', waitSeconds: 120 },
+    }));
+    const error = await invoke(storeDir, { op: 'sendText', args: {} }).catch((e) => e);
+    expect(error).toBeInstanceOf(SendCommandError);
+    expect(error.details).toMatchObject({ type: 'rate_limit', method: 'sendText', waitSeconds: 120 });
+  });
+
+  it('passes timeoutMs through as the request budget (0 disables it)', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(200, { result: { ok: true } }));
+    await invoke(storeDir, { op: 'sendText', args: {}, timeoutMs: 0 });
+    const [, init] = global.fetch.mock.calls[0];
+    expect(init.signal).toBeUndefined();
   });
 });
 

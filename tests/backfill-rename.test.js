@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const services = vi.hoisted(() => ({ current: null }));
+const control = vi.hoisted(() => ({ ensureServer: null, invoke: null }));
 
 vi.mock('../core/services.js', () => ({
   createServices: vi.fn(() => services.current),
@@ -21,6 +22,17 @@ vi.mock('../core/services.js', () => ({
   createMessageSyncService: vi.fn(() => ({ messageSyncService: services.current.messageSyncService })),
   // Archive-only commands validate config via withCommand; stub it as a no-op.
   resolveValidatedConfig: vi.fn(() => ({})),
+}));
+
+// Commands routed through the warm server reach it via ensureServer + invoke;
+// stub both so `channels watch/unwatch` resolve to a server invoke without any
+// real process or network.
+vi.mock('../core/control-client.js', () => ({
+  ensureServer: (...args) => control.ensureServer(...args),
+  invoke: (...args) => control.invoke(...args),
+  pingServer: vi.fn(),
+  enqueueBackfill: vi.fn(),
+  cancelBackfill: vi.fn(),
 }));
 
 vi.mock('../store-lock.js', () => ({
@@ -128,6 +140,15 @@ describe('channels watch / unwatch', () => {
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    control.ensureServer = vi.fn().mockResolvedValue({ ok: true });
+    // The server runs the channelSetSync op; model its result shape here.
+    control.invoke = vi.fn(async (_storeDir, { args }) => ({
+      channelId: args.chat,
+      syncEnabled: args.enable,
+      jobId: args.enable ? 1 : null,
+      jobStatus: args.enable ? 'pending' : null,
+      jobQueued: Boolean(args.enable),
+    }));
   });
 
   afterEach(() => {
@@ -136,43 +157,50 @@ describe('channels watch / unwatch', () => {
     vi.clearAllMocks();
   });
 
-  it('`channels watch --chat X` enables sync and queues a backfill job', async () => {
-    services.current = makeFakeServices();
+  it('`channels watch --chat X` routes channelSetSync(enable) to the server', async () => {
     await runProgram(['channels', 'watch', '--chat', '@chan']);
-    const svc = services.current.messageSyncService;
-    expect(svc.setChannelSync).toHaveBeenCalledWith('@chan', true);
-    // Queues a job when none exists (parity with `channels sync --enable`).
-    expect(svc.addJob).toHaveBeenCalledWith('@chan');
+    expect(control.ensureServer).toHaveBeenCalledTimes(1);
+    expect(control.invoke).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      op: 'channelSetSync',
+      args: { chat: '@chan', enable: true },
+      timeoutMs: undefined,
+    });
   });
 
-  it('`channels unwatch --chat X` disables sync and queues no job', async () => {
-    services.current = makeFakeServices();
+  it('`channels unwatch --chat X` routes channelSetSync(disable) to the server', async () => {
     await runProgram(['channels', 'unwatch', '--chat', '@chan']);
-    const svc = services.current.messageSyncService;
-    expect(svc.setChannelSync).toHaveBeenCalledWith('@chan', false);
-    expect(svc.addJob).not.toHaveBeenCalled();
+    expect(control.invoke).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      op: 'channelSetSync',
+      args: { chat: '@chan', enable: false },
+      timeoutMs: undefined,
+    });
   });
 
-  it('`channels watch` matches legacy `channels sync --enable` behavior', async () => {
-    services.current = makeFakeServices();
+  it('`channels watch` matches legacy `channels sync --enable` (same op + args)', async () => {
     await runProgram(['channels', 'watch', '--chat', '@chan']);
-    const watchSvc = services.current.messageSyncService;
+    const watchCalls = control.invoke.mock.calls.slice();
 
-    services.current = makeFakeServices();
+    control.invoke.mockClear();
     await runProgram(['channels', 'sync', '--chat', '@chan', '--enable']);
-    const enableSvc = services.current.messageSyncService;
+    const enableCalls = control.invoke.mock.calls.slice();
 
-    expect(watchSvc.setChannelSync.mock.calls).toEqual(enableSvc.setChannelSync.mock.calls);
-    expect(watchSvc.addJob.mock.calls).toEqual(enableSvc.addJob.mock.calls);
+    expect(watchCalls).toEqual(enableCalls);
   });
 
-  it('legacy hidden `channels sync --enable/--disable` still works', async () => {
-    services.current = makeFakeServices();
+  it('legacy hidden `channels sync --enable/--disable` still routes to the server', async () => {
     await runProgram(['channels', 'sync', '--chat', '@chan', '--enable']);
-    expect(services.current.messageSyncService.setChannelSync).toHaveBeenCalledWith('@chan', true);
+    expect(control.invoke).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      op: 'channelSetSync',
+      args: { chat: '@chan', enable: true },
+      timeoutMs: undefined,
+    });
 
-    services.current = makeFakeServices();
+    control.invoke.mockClear();
     await runProgram(['channels', 'sync', '--chat', '@chan', '--disable']);
-    expect(services.current.messageSyncService.setChannelSync).toHaveBeenCalledWith('@chan', false);
+    expect(control.invoke).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      op: 'channelSetSync',
+      args: { chat: '@chan', enable: false },
+      timeoutMs: undefined,
+    });
   });
 });

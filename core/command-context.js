@@ -1,7 +1,7 @@
 import { resolveStoreDir } from './store.js';
 import { acquireReadLock, acquireStoreLock } from '../store-lock.js';
 import { createMessageSyncService, createTelegramClient, resolveValidatedConfig } from './services.js';
-import { invoke, pingServer } from './control-client.js';
+import { ensureServer, invoke } from './control-client.js';
 import { OPERATIONS } from './operations.js';
 
 // Runs fn(ctx) with exactly the services a command needs, owning the surrounding
@@ -79,34 +79,25 @@ export async function withCommand(globalFlags, opts, fn) {
   }, timeoutMs, onTimeout, timeoutMessage);
 }
 
-// Runs a shared operation server-first with a local fallback, returning its
-// structured result. Both paths execute the SAME OPERATIONS[op], so the result —
-// and therefore whatever the caller renders from it — is identical regardless of
-// who served it.
+// Runs a shared operation against the always-on control server, returning its
+// structured result. The server is the single warm backend: it owns the live
+// MTProto connection, the open DB, auth, and store locking, so the CLI is a thin
+// client here.
 //
-//   - If a control server is already running, ask it to run the op against its
-//     warm (already-authed) services via POST /control/invoke.
-//   - Otherwise run the op locally inside withCommand with the requested
-//     services/lock. requireAuth enforces the local auth check; the warm path
-//     needs none because the server's client is already logged in.
+//   - Auto-start the server when it is not already running (ensureServer), then
+//     ask it to run OPERATIONS[op] against its warm services via POST
+//     /control/invoke and return that result.
+//   - invokeTimeoutMs bounds the client's wait on that request (e.g. the 30s
+//     send default); it is independent of the global --timeout.
 //
-// Opportunistic only: this never starts a server, so an offline run keeps the
-// current local behavior.
-export async function runOperation(globalFlags, { op, args, need, lock, requireAuth = false }) {
-  const handler = OPERATIONS[op];
-  if (!handler) {
+// A failure to reach or start the server surfaces as a clear error.
+export async function runOperation(globalFlags, { op, args, invokeTimeoutMs } = {}) {
+  if (!OPERATIONS[op]) {
     throw new Error(`runOperation: unknown operation "${op}"`);
   }
   const storeDir = resolveStoreDir();
-  if (await pingServer(storeDir)) {
-    return invoke(storeDir, { op, args });
-  }
-  return withCommand(globalFlags, { need, lock }, async (ctx) => {
-    if (requireAuth && !(await ctx.telegramClient.isAuthorized().catch(() => false))) {
-      throw new Error('Not authenticated. Run `node cli.js auth` first.');
-    }
-    return handler(ctx, args);
-  });
+  await ensureServer(storeDir, { idleExit: '60s' });
+  return invoke(storeDir, { op, args, timeoutMs: invokeTimeoutMs });
 }
 
 const VALID_NEEDS = new Set(['telegram', 'archive', 'full', 'worker']);
