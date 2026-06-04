@@ -12,6 +12,7 @@ const control = vi.hoisted(() => ({
   pingServer: vi.fn(() => Promise.resolve(null)),
   enqueueBackfill: vi.fn(() => Promise.resolve({ jobId: 11, channelId: '-100', status: 'pending' })),
   cancelBackfill: vi.fn(() => Promise.resolve({ canceled: 1, jobIds: [11] })),
+  retryBackfill: vi.fn(() => Promise.resolve({ updated: 2, jobIds: [11, 12] })),
 }));
 
 vi.mock('../core/services.js', () => ({
@@ -74,10 +75,12 @@ afterEach(() => {
   control.pingServer.mockClear();
   control.enqueueBackfill.mockClear();
   control.cancelBackfill.mockClear();
+  control.retryBackfill.mockClear();
   control.ensureServer.mockResolvedValue({ ok: true, pid: 7, version: '2' });
   control.pingServer.mockResolvedValue(null);
   control.enqueueBackfill.mockResolvedValue({ jobId: 11, channelId: '-100', status: 'pending' });
   control.cancelBackfill.mockResolvedValue({ canceled: 1, jobIds: [11] });
+  control.retryBackfill.mockResolvedValue({ updated: 2, jobIds: [11, 12] });
   vi.clearAllMocks();
 });
 
@@ -220,5 +223,79 @@ describe('backfill cancel', () => {
     await runProgram(['backfill', 'cancel', '--chat', '@chan']);
     expect(control.cancelBackfill).not.toHaveBeenCalled();
     expect(services.current.messageSyncService.cancelJobs).toHaveBeenCalledWith({ channelId: '@chan' });
+  });
+});
+
+describe('backfill (no --chat): queue draining via the server', () => {
+  it('--once starts the server and tracks the queue to completion', async () => {
+    services.current = makeFakeServices({
+      getJobCounts: vi.fn(() => ({ pending: 0, inProgress: 0 })),
+    });
+    await runProgram(['backfill', '--once']);
+    expect(control.ensureServer).toHaveBeenCalledWith('/tmp/tgcli-test-store', { idleExit: '60s' });
+    // No in-process worker: never created services for queue processing, only the
+    // brief read snapshot the drain poll uses.
+    expect(services.current.messageSyncService.processQueue).toBeUndefined();
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Backfill queue drained.');
+  });
+
+  it('--follow tracks the queue with progress, then exits when drained', async () => {
+    const getJobCounts = vi
+      .fn()
+      .mockReturnValueOnce({ pending: 0, inProgress: 1 })
+      .mockReturnValue({ pending: 0, inProgress: 0 });
+    services.current = makeFakeServices({
+      getJobCounts,
+      listJobs: vi.fn((q) => (q.status === 'in_progress'
+        ? [{ id: 11, channel_id: '-100', peer_title: 'Chan', status: 'in_progress', message_count: 5, target_message_count: 100 }]
+        : [])),
+    });
+    await runProgram(['sync', '--follow']);
+    expect(control.ensureServer).toHaveBeenCalledWith('/tmp/tgcli-test-store', { idleExit: '60s' });
+    expect(stderrText()).toContain('Backfilling Chan');
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Backfill queue drained.');
+  });
+
+  it('bare backfill (no flags) prints usage and does not touch the server', async () => {
+    services.current = makeFakeServices();
+    await runProgram(['backfill']);
+    expect(control.ensureServer).not.toHaveBeenCalled();
+    expect(stderrText()).toContain('Usage:');
+  });
+});
+
+describe('backfill jobs add / retry route through the control API', () => {
+  it('jobs add enqueues via the control client (no in-process queue)', async () => {
+    services.current = makeFakeServices();
+    await runProgram(['backfill', 'jobs', 'add', '--chat', '@chan', '--depth', '5']);
+    expect(control.ensureServer).toHaveBeenCalledWith('/tmp/tgcli-test-store', { idleExit: '60s' });
+    expect(control.enqueueBackfill).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      chatId: '@chan',
+      depth: 5,
+      minDate: null,
+    });
+    expect(services.current.messageSyncService.processQueue).toBeUndefined();
+  });
+
+  it('jobs retry resets via the control client and lets the server process', async () => {
+    services.current = makeFakeServices();
+    await runProgram(['backfill', 'jobs', 'retry', '--all-errors']);
+    expect(control.ensureServer).toHaveBeenCalledWith('/tmp/tgcli-test-store', { idleExit: '60s' });
+    expect(control.retryBackfill).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      jobId: null,
+      channelId: null,
+      allErrors: true,
+    });
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Re-queued 2 job(s).');
+  });
+
+  it('jobs retry by channel routes the channel filter to the server', async () => {
+    services.current = makeFakeServices();
+    await runProgram(['backfill', 'jobs', 'retry', '--channel', '@chan']);
+    expect(control.retryBackfill).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      jobId: null,
+      channelId: '@chan',
+      allErrors: false,
+    });
   });
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildSendPhotoSuccessPayload, logSendRetry, normalizeSendCommandError, parseNonNegativeInt, shouldRunMain, writeError } from '../cli.js';
+import { buildSendPhotoSuccessPayload, normalizeSendCommandError, parseNonNegativeInt, shouldRunMain, writeError } from '../cli.js';
 import { SendCommandError, buildSendErrorPayload } from '../core/send-utils.js';
 
 describe('tgcli send photo CLI validation', () => {
@@ -155,30 +155,3 @@ describe('writeError', () => {
   });
 });
 
-describe('logSendRetry', () => {
-  let stderrSpy;
-
-  beforeEach(() => {
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-  });
-
-  afterEach(() => {
-    stderrSpy.mockRestore();
-  });
-
-  it('writes structured JSON event to stderr in JSON mode', () => {
-    const details = { type: 'network', method: 'sendPhoto', message: 'ECONNRESET', attempt: 1, retries: 3 };
-    logSendRetry(details, { json: true });
-    const written = JSON.parse(stderrSpy.mock.calls[0][0]);
-    expect(written).toEqual({ event: 'retry', type: 'network', method: 'sendPhoto', message: 'ECONNRESET', attempt: 1, retries: 3 });
-  });
-
-  it('writes human-readable retry message to stderr in text mode', () => {
-    const details = { type: 'network', method: 'sendPhoto', message: 'ECONNRESET', code: 'ECONNRESET', attempt: 1, retries: 3 };
-    logSendRetry(details, { json: false });
-    const output = stderrSpy.mock.calls[0][0];
-    expect(output).toContain('sendPhoto transient network error');
-    expect(output).toContain('attempt 1/4');
-    expect(output).toContain('(ECONNRESET)');
-  });
-});

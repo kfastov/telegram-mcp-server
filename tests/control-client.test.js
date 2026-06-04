@@ -18,6 +18,7 @@ import {
   invoke,
   pingServer,
   readControlFile,
+  retryBackfill,
 } from '../core/control-client.js';
 import { CONTROL_TOKEN_HEADER } from '../core/control-server.js';
 import { SendCommandError } from '../core/send-utils.js';
@@ -120,6 +121,21 @@ describe('enqueueBackfill / cancelBackfill', () => {
     const [url, init] = global.fetch.mock.calls[0];
     expect(url).toBe('http://127.0.0.1:8765/control/cancel');
     expect(JSON.parse(init.body)).toEqual({ chatId: '@c', jobId: undefined });
+  });
+
+  it('POSTs to /control/retry and returns the reset result', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(200, { updated: 3, jobIds: [1, 2, 3] }));
+    const result = await retryBackfill(storeDir, { allErrors: true });
+    expect(result).toEqual({ updated: 3, jobIds: [1, 2, 3] });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:8765/control/retry');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ jobId: undefined, channelId: undefined, allErrors: true });
+  });
+
+  it('throws the server error message on a non-200 retry response', async () => {
+    global.fetch.mockResolvedValue(jsonResponse(400, { error: 'Provide jobId, channelId, or allErrors' }));
+    await expect(retryBackfill(storeDir, {})).rejects.toThrow('Provide jobId, channelId, or allErrors');
   });
 });
 

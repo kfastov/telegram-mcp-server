@@ -124,6 +124,25 @@ export async function cancelBackfill(storeDir, { chatId, jobId } = {}) {
   return json;
 }
 
+// POST /control/retry → { updated, jobIds }. Resets the matching errored job(s)
+// to pending on the server so its queue reprocesses them. Throws on a non-2xx
+// response.
+export async function retryBackfill(storeDir, { jobId, channelId, allErrors } = {}) {
+  const control = readControlFile(storeDir);
+  if (!control) {
+    throw new Error('No control server is running. Start one with `tgcli server`.');
+  }
+  const { status, json } = await controlFetch(control, '/control/retry', {
+    method: 'POST',
+    body: { jobId, channelId, allErrors },
+    timeoutMs: ENQUEUE_TIMEOUT_MS,
+  });
+  if (status !== 200) {
+    throw new Error(json?.error ?? `Retry request failed (HTTP ${status})`);
+  }
+  return json;
+}
+
 // POST /control/invoke { op, args } → the operation's result. Runs the shared
 // operation handler against the server's warm services and returns `result`.
 // timeoutMs bounds the request wait (defaults to the enqueue budget); a value of

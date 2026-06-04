@@ -20,6 +20,7 @@ function makeService(overrides = {}) {
     })),
     processQueue: vi.fn(() => Promise.resolve()),
     cancelJobs: vi.fn(() => ({ canceled: 1, jobIds: [42] })),
+    retryJobs: vi.fn(() => ({ updated: 1, jobIds: [42] })),
     ...overrides,
   };
 }
@@ -142,6 +143,53 @@ describe('control API request handler', () => {
     });
     expect(status).toBe(400);
     expect(service.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('POST /control/retry resets via retryJobs and kicks the queue', async () => {
+    const { status, json } = await request(port, 'POST', '/control/retry', {
+      token: TOKEN,
+      body: { channelId: '777' },
+    });
+    expect(status).toBe(200);
+    expect(service.retryJobs).toHaveBeenCalledWith({
+      jobId: undefined,
+      channelId: '777',
+      allErrors: false,
+    });
+    expect(service.processQueue).toHaveBeenCalledTimes(1);
+    expect(json).toEqual({ updated: 1, jobIds: [42] });
+  });
+
+  it('POST /control/retry accepts allErrors', async () => {
+    const { status } = await request(port, 'POST', '/control/retry', {
+      token: TOKEN,
+      body: { allErrors: true },
+    });
+    expect(status).toBe(200);
+    expect(service.retryJobs).toHaveBeenCalledWith({
+      jobId: undefined,
+      channelId: undefined,
+      allErrors: true,
+    });
+  });
+
+  it('POST /control/retry does not kick the queue when nothing was reset', async () => {
+    service.retryJobs.mockReturnValueOnce({ updated: 0, jobIds: [] });
+    const { status } = await request(port, 'POST', '/control/retry', {
+      token: TOKEN,
+      body: { jobId: 99 },
+    });
+    expect(status).toBe(200);
+    expect(service.processQueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /control/retry requires jobId, channelId, or allErrors', async () => {
+    const { status } = await request(port, 'POST', '/control/retry', {
+      token: TOKEN,
+      body: {},
+    });
+    expect(status).toBe(400);
+    expect(service.retryJobs).not.toHaveBeenCalled();
   });
 
   it('rejects requests with a missing token', async () => {

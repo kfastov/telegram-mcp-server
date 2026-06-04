@@ -169,6 +169,32 @@ export function createControlRequestHandler({
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/control/retry') {
+        const body = await readJsonBody(req);
+        const jobId = body?.jobId;
+        const channelId = body?.channelId;
+        const allErrors = Boolean(body?.allErrors);
+        if (
+          !allErrors &&
+          (jobId === undefined || jobId === null) &&
+          (channelId === undefined || channelId === null || String(channelId).trim() === '')
+        ) {
+          sendJson(res, 400, { error: 'Provide jobId, channelId, or allErrors' });
+          return;
+        }
+        // Same logic as `sync jobs retry`: reset the errored job(s) to pending,
+        // then kick the queue so the server's worker picks them back up.
+        const result = service.retryJobs({ jobId, channelId, allErrors });
+        if (result.updated > 0) {
+          void service.processQueue();
+        }
+        sendJson(res, 200, {
+          updated: result.updated,
+          jobIds: result.jobIds,
+        });
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/control/cancel') {
         const body = await readJsonBody(req);
         const chatId = body?.chatId;
