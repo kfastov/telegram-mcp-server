@@ -54,6 +54,7 @@ const IDLE_CHECK_INTERVAL_MS = 5000;
 const { telegramClient, messageSyncService } = createServices({ storeDir, config });
 
 let telegramReady = false;
+let telegramConnectPromise = null;
 let serviceState = null;
 let controlToken = null;
 let controlServer = null;
@@ -134,21 +135,47 @@ function updateServiceState(patch) {
   writeServiceState(serviceState);
 }
 
-async function initializeTelegram() {
-  if (telegramReady) return;
-
-  console.log("[startup] Initializing Telegram dialogs...");
-  const dialogsReady = await telegramClient.initializeDialogCache();
-
-  if (!dialogsReady) {
-    throw new Error("Failed to initialize Telegram dialog list");
+// Connect the warm Telegram client (login + realtime updates). This is the
+// readiness gate for operations: it does NOT seed the dialog archive, so it
+// completes in a few seconds even on a large account. A single in-flight promise
+// is shared so concurrent callers (the ensureLogin hook each control handler
+// runs) await one connect rather than starting several.
+function ensureTelegramConnected() {
+  if (telegramReady) {
+    return Promise.resolve();
   }
+  if (!telegramConnectPromise) {
+    telegramConnectPromise = (async () => {
+      console.log("[startup] Connecting Telegram client...");
+      const dialogsReady = await telegramClient.initializeDialogCache();
+      if (!dialogsReady) {
+        throw new Error("Failed to initialize Telegram dialog list");
+      }
+      telegramReady = true;
+      console.log("[startup] Telegram client connected.");
+      // Seed the archive registry and start realtime/queue work in the
+      // background; ops do their own live fetches and must not wait on the full
+      // dialog refresh, which is slow on large accounts.
+      void seedArchiveInBackground();
+    })().catch((error) => {
+      // Reset so a later operation can retry the connect instead of being stuck
+      // on a permanently rejected promise.
+      telegramConnectPromise = null;
+      throw error;
+    });
+  }
+  return telegramConnectPromise;
+}
 
-  const dialogCount = await messageSyncService.refreshChannelsFromDialogs();
-  console.log(`[startup] Seeded ${dialogCount} dialogs into archive registry.`);
-  messageSyncService.startRealtimeSync();
-  messageSyncService.resumePendingJobs();
-  telegramReady = true;
+async function seedArchiveInBackground() {
+  try {
+    const dialogCount = await messageSyncService.refreshChannelsFromDialogs();
+    console.log(`[startup] Seeded ${dialogCount} dialogs into archive registry.`);
+    messageSyncService.startRealtimeSync();
+    messageSyncService.resumePendingJobs();
+  } catch (error) {
+    console.error(`[startup] Background archive seeding failed: ${error?.message ?? error}`);
+  }
 }
 
 /**
@@ -625,7 +652,7 @@ function createServerInstance() {
     "Lists available Telegram dialogs for the authenticated account, including unread message counts.",
     listChannelsSchema,
     async ({ limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const dialogs = await OPERATIONS.listChannels(warmServices, { limit });
 
       return {
@@ -644,7 +671,7 @@ function createServerInstance() {
     "Searches dialogs by title or username.",
     searchChannelsSchema,
     async ({ keywords, limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const matches = await OPERATIONS.listChannels(warmServices, { query: keywords, limit: limit ?? 100 });
 
       return {
@@ -735,7 +762,7 @@ function createServerInstance() {
     "Fetches and caches extended metadata for channels.",
     refreshChannelMetadataSchema,
     async ({ channelIds, limit, force, onlyMissing }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const results = await OPERATIONS.metadataRefresh(warmServices, {
         channelIds,
         limit,
@@ -777,7 +804,7 @@ function createServerInstance() {
     "Auto-tags channels based on title, username, and cached metadata.",
     autoTagChannelsSchema,
     async ({ channelIds, limit, source, refreshMetadata }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const results = await OPERATIONS.tagsAuto(warmServices, {
         channelIds,
         limit,
@@ -801,7 +828,7 @@ function createServerInstance() {
     "Lists forum topics for a supergroup.",
     topicsListSchema,
     async ({ channelId, limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const { topics } = await OPERATIONS.topicsList(warmServices, { channelId, limit: limit ?? 100 });
 
       const formatted = topics.map((topic) => {
@@ -852,7 +879,7 @@ function createServerInstance() {
     "Searches forum topics by title.",
     topicsSearchSchema,
     async ({ channelId, query, limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const { topics } = await OPERATIONS.topicsList(warmServices, { channelId, query, limit: limit ?? 100 });
 
       const formatted = topics.map((topic) => ({
@@ -891,7 +918,7 @@ function createServerInstance() {
       if ((source === "live" || source === "both") && !channelId) {
         throw new Error("channelId is required for live source.");
       }
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.messagesList(warmServices, {
         channelId,
         topicId,
@@ -925,7 +952,7 @@ function createServerInstance() {
     "Fetches a specific message from the archive or live Telegram API.",
     messagesGetSchema,
     async ({ channelId, messageId, source }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.messagesGet(warmServices, { channelId, messageId, source });
 
       return {
@@ -951,7 +978,7 @@ function createServerInstance() {
     "Returns surrounding messages for a target message.",
     messagesContextSchema,
     async ({ channelId, messageId, before, after, source }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.messagesContext(warmServices, {
         channelId,
         messageId,
@@ -1000,7 +1027,7 @@ function createServerInstance() {
     }) => {
       const resolvedChannelIds = resolveChannelIds(channelIds, channelId);
       const resolvedTags = Array.isArray(tags) ? tags : (tag ? [tag] : null);
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.messagesSearch(warmServices, {
         query,
         regex,
@@ -1038,7 +1065,7 @@ function createServerInstance() {
     "Sends a text message to a channel or chat.",
     messagesSendSchema,
     async ({ channelId, text, topicId, replyToMessageId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const { result } = await OPERATIONS.sendText(warmServices, {
         chat: channelId,
         text,
@@ -1062,7 +1089,7 @@ function createServerInstance() {
     "Sends a file with an optional caption.",
     messagesSendFileSchema,
     async ({ channelId, filePath, caption, filename, topicId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const { result } = await OPERATIONS.sendFile(warmServices, {
         chat: channelId,
         file: filePath,
@@ -1087,7 +1114,7 @@ function createServerInstance() {
     "Downloads media from a message to a local file.",
     mediaDownloadSchema,
     async ({ channelId, messageId, outputPath }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.mediaDownload(warmServices, { channelId, messageId, outputPath });
 
       return {
@@ -1106,7 +1133,7 @@ function createServerInstance() {
     "Searches contacts/users with aliases, tags, and notes.",
     contactsSearchSchema,
     async ({ query, limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const contacts = await OPERATIONS.contactsSearch(warmServices, { query, limit });
 
       return {
@@ -1125,7 +1152,7 @@ function createServerInstance() {
     "Returns a contact profile from the local store.",
     contactsGetSchema,
     async ({ userId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const contact = await OPERATIONS.contactsShow(warmServices, { userId });
 
       return {
@@ -1234,7 +1261,7 @@ function createServerInstance() {
     "Lists group chats and supergroups.",
     groupsListSchema,
     async ({ query, limit }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const groups = await OPERATIONS.groupsList(warmServices, { query, limit });
 
       return {
@@ -1253,7 +1280,7 @@ function createServerInstance() {
     "Fetches group information and metadata.",
     groupsInfoSchema,
     async ({ channelId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const info = await OPERATIONS.groupsInfo(warmServices, { chat: channelId });
 
       return {
@@ -1272,7 +1299,7 @@ function createServerInstance() {
     "Renames a group chat or supergroup.",
     groupsRenameSchema,
     async ({ channelId, name }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       await OPERATIONS.groupsRename(warmServices, { chat: channelId, name });
 
       return {
@@ -1291,7 +1318,7 @@ function createServerInstance() {
     "Adds members to a group.",
     groupsMembersAddSchema,
     async ({ channelId, userIds }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.groupMembersAdd(warmServices, { chat: channelId, userIds });
 
       return {
@@ -1310,7 +1337,7 @@ function createServerInstance() {
     "Removes members from a group.",
     groupsMembersRemoveSchema,
     async ({ channelId, userIds }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.groupMembersRemove(warmServices, { chat: channelId, userIds });
 
       return {
@@ -1329,7 +1356,7 @@ function createServerInstance() {
     "Gets the primary invite link for a group.",
     groupsInviteLinkGetSchema,
     async ({ channelId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const link = await OPERATIONS.getGroupInviteLink(warmServices, { chat: channelId });
 
       return {
@@ -1348,7 +1375,7 @@ function createServerInstance() {
     "Revokes the primary invite link for a group.",
     groupsInviteLinkRevokeSchema,
     async ({ channelId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const link = await OPERATIONS.revokeGroupInviteLink(warmServices, { chat: channelId });
 
       return {
@@ -1367,7 +1394,7 @@ function createServerInstance() {
     "Joins a group using an invite link or code.",
     groupsJoinSchema,
     async ({ invite }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const chat = await OPERATIONS.groupsJoin(warmServices, { invite });
 
       return {
@@ -1395,7 +1422,7 @@ function createServerInstance() {
     "Leaves a group chat or channel.",
     groupsLeaveSchema,
     async ({ channelId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       await OPERATIONS.groupsLeave(warmServices, { chat: channelId });
 
       return {
@@ -1414,7 +1441,7 @@ function createServerInstance() {
     "Schedules a background job to archive channel messages locally.",
     scheduleMessageSyncSchema,
     async ({ channelId, depth, minDate }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const job = messageSyncService.addJob(channelId, { depth, minDate });
       void messageSyncService.processQueue();
 
@@ -1477,7 +1504,7 @@ function createServerInstance() {
     "Marks a Telegram channel as read up to the specified message ID.",
     markChannelReadSchema,
     async ({ channelId, messageId }) => {
-      await telegramClient.ensureLogin();
+      await ensureTelegramConnected();
       const result = await OPERATIONS.channelMarkRead(warmServices, { chat: channelId, messageId });
 
       return {
@@ -1658,10 +1685,12 @@ async function handleSessionRequest(req, res) {
 // TODO: MCP server should participate in the store locking protocol.
 // Currently it opens the SQLite DB and Telegram session without any lock,
 // which can cause conflicts with concurrent CLI commands.
-await initializeTelegram().catch((error) => {
-  console.error(`[startup] Telegram initialization failed: ${error?.message ?? error}`);
-  process.exit(1);
-});
+//
+// The listeners below start first so /control/ping succeeds and control.json is
+// written within ~1s of spawn, independent of the Telegram connection. The
+// connect runs in the background; each control handler's ensureLogin hook awaits
+// the shared connect promise before touching MTProto, so the first operation —
+// not the readiness probe — pays the connect cost.
 
 serviceState = {
   pid: process.pid,
@@ -1759,7 +1788,9 @@ if (controlEnabled) {
     onActivity: () => {
       lastControlActivityAt = Date.now();
     },
-    ensureLogin: () => telegramClient.ensureLogin(),
+    // Await the shared connect before any op touches MTProto; the connect is
+    // kicked off in the background once the listeners are up.
+    ensureLogin: () => ensureTelegramConnected(),
   });
 
   controlServer = http.createServer((req, res) => {
@@ -1797,6 +1828,14 @@ if (controlEnabled) {
     controlPort: CONTROL_PORT,
   });
 }
+
+// Warm the Telegram connection in the background now that the listeners are up
+// and reachable. Operations await this same promise via ensureTelegramConnected,
+// so a connect that is still in flight when the first op arrives is shared, not
+// restarted. A failure here is logged; the next operation retries the connect.
+void ensureTelegramConnected().catch((error) => {
+  console.error(`[startup] Telegram connect failed: ${error?.message ?? error}`);
+});
 
 // --- Idle-exit monitor (active only when --idle-exit is configured) ---
 if (IDLE_EXIT_MS > 0) {
