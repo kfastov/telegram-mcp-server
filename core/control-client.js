@@ -23,6 +23,34 @@ const ENQUEUE_TIMEOUT_MS = 30000;
 const SERVER_START_TIMEOUT_MS = 10000;
 const SERVER_POLL_INTERVAL_MS = 250;
 
+// Raised when the control server cannot be reached at all: no control.json, a
+// refused/failed loopback connection, etc. This is distinct from an operation
+// that ran on a live server and failed (a 4xx/5xx). Callers use it to decide
+// whether to start a server and retry, versus surfacing the operation's error.
+export class ServerUnavailableError extends Error {
+  constructor(message, { cause } = {}) {
+    super(message);
+    this.name = 'ServerUnavailableError';
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
+  }
+}
+
+// True for a network-level fetch failure (e.g. ECONNREFUSED) where the server
+// never answered. An AbortSignal.timeout fires a TimeoutError and an explicit
+// abort fires an AbortError; those mean the server was reached but did not reply
+// in time, so they are NOT connection failures.
+function isFetchConnectionFailure(error) {
+  if (!error) {
+    return false;
+  }
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+    return false;
+  }
+  return error instanceof TypeError || typeof error.code === 'string';
+}
+
 // Parse <store>/control.json, returning the descriptor or null when absent.
 // Shape: { pid, port, token, startedAt, version }.
 export function readControlFile(storeDir) {
@@ -153,14 +181,26 @@ export async function retryBackfill(storeDir, { jobId, channelId, allErrors } = 
 export async function invoke(storeDir, { op, args, timeoutMs } = {}) {
   const control = readControlFile(storeDir);
   if (!control) {
-    throw new Error('No control server is running.');
+    throw new ServerUnavailableError('No control server is running.');
   }
   const effectiveTimeoutMs = timeoutMs === undefined ? ENQUEUE_TIMEOUT_MS : timeoutMs;
-  const { status, json } = await controlFetch(control, '/control/invoke', {
-    method: 'POST',
-    body: { op, args },
-    timeoutMs: effectiveTimeoutMs > 0 ? effectiveTimeoutMs : undefined,
-  });
+  let response;
+  try {
+    response = await controlFetch(control, '/control/invoke', {
+      method: 'POST',
+      body: { op, args },
+      timeoutMs: effectiveTimeoutMs > 0 ? effectiveTimeoutMs : undefined,
+    });
+  } catch (error) {
+    // A refused/failed loopback connection means the server is not actually up;
+    // surface it as unavailable so the caller can start one and retry. A request
+    // timeout (TimeoutError/AbortError) reaches a live server and is re-thrown.
+    if (isFetchConnectionFailure(error)) {
+      throw new ServerUnavailableError('Could not reach the control server.', { cause: error });
+    }
+    throw error;
+  }
+  const { status, json } = response;
   if (status !== 200) {
     if (json?.sendError) {
       throw new SendCommandError(json.sendError);

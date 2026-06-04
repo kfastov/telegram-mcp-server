@@ -21,12 +21,20 @@ vi.mock('../core/services.js', () => ({
 // Send commands route through the warm server (ensureServer + invoke). The CLI's
 // timeoutMs bounds its wait on invoke; modeling that wait here lets us assert the
 // CLI surfaces a clear send-timeout without any real process or network.
+class ServerUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ServerUnavailableError';
+  }
+}
+
 vi.mock('../core/control-client.js', () => ({
   ensureServer: (...args) => control.ensureServer(...args),
   invoke: (...args) => control.invoke(...args),
   pingServer: vi.fn(),
   enqueueBackfill: vi.fn(),
   cancelBackfill: vi.fn(),
+  ServerUnavailableError,
 }));
 
 vi.mock('../store-lock.js', () => ({

@@ -28,6 +28,47 @@ function resolveSource(source) {
   return resolved;
 }
 
+// Resolve a single result (a message or a context bundle) from one source,
+// shared by the message ops that return one item. fetchLive/fetchArchive each
+// return the formatted result or null when absent; the whole result comes from a
+// single source so live and archive data never mix:
+//   live  -> live only
+//   both  -> live first, then archive
+//   archive -> archive first, then live as a fallback (flags usedLiveFallback)
+// Returns { result, source, usedLiveFallback }, or null when nothing is found.
+async function resolveFromSource({ source, fetchLive, fetchArchive }) {
+  let result = null;
+  let resolvedFrom = null;
+  let usedLiveFallback = false;
+
+  if (source === 'live' || source === 'both') {
+    result = await fetchLive();
+    if (result) {
+      resolvedFrom = 'live';
+    }
+  }
+
+  if (!result && (source === 'archive' || source === 'both')) {
+    result = await fetchArchive();
+    if (result) {
+      resolvedFrom = 'archive';
+    }
+  }
+
+  if (!result && source === 'archive') {
+    result = await fetchLive();
+    if (result) {
+      resolvedFrom = 'live';
+      usedLiveFallback = true;
+    }
+  }
+
+  if (!result) {
+    return null;
+  }
+  return { result, source: resolvedFrom ?? source, usedLiveFallback };
+}
+
 function parseDateMs(value, label) {
   if (!value) {
     return null;
@@ -124,6 +165,20 @@ function mergeMessageSets(sets, limit) {
   const merged = Array.from(map.values());
   merged.sort((a, b) => messageDateMs(b) - messageDateMs(a));
   return limit && limit > 0 ? merged.slice(0, limit) : merged;
+}
+
+// Pick the final message set and the source label it reports, shared by the
+// list/search ops. A 'both' request merges the two sets; otherwise the result is
+// drawn from a single source so live and archive rows never mix. An archive
+// request that fell back to live reports 'live'. Returns { messages, source }.
+function selectMessageResults({ source, archivedResults, liveResults, usedLiveFallback, limit }) {
+  if (source === 'both') {
+    return { messages: mergeMessageSets([archivedResults, liveResults], limit), source };
+  }
+  if (source === 'live' || usedLiveFallback) {
+    return { messages: liveResults, source: 'live' };
+  }
+  return { messages: archivedResults, source };
 }
 
 function buildMessageListPayload(source, messages, requestedLimit) {
@@ -231,11 +286,6 @@ async function channelSetSync(ctx, args = {}) {
   };
 }
 
-// args: { chat, messageId }. Marks the channel read up to messageId.
-async function channelMarkRead(ctx, args = {}) {
-  return ctx.telegramClient.markChannelRead(args.chat, args.messageId);
-}
-
 // --- messages ---
 
 async function fetchLiveMessagesForChannel(ctx, id, options = {}) {
@@ -340,16 +390,13 @@ async function messagesList(ctx, args = {}) {
     usedLiveFallback = true;
   }
 
-  let messages = [];
-  let outputSource = resolvedSource;
-  if (resolvedSource === 'both') {
-    messages = mergeMessageSets([archivedResults, liveResults], limit);
-  } else if (resolvedSource === 'live' || usedLiveFallback) {
-    messages = liveResults;
-    outputSource = 'live';
-  } else {
-    messages = archivedResults;
-  }
+  const { messages, source: outputSource } = selectMessageResults({
+    source: resolvedSource,
+    archivedResults,
+    liveResults,
+    usedLiveFallback,
+    limit,
+  });
 
   return { ...buildMessageListPayload(outputSource, messages, limit), usedLiveFallback };
 }
@@ -462,16 +509,13 @@ async function messagesSearch(ctx, args = {}) {
     }
   }
 
-  let messages = [];
-  let outputSource = resolvedSource;
-  if (resolvedSource === 'both') {
-    messages = mergeMessageSets([archivedResults, liveResults], limit);
-  } else if (resolvedSource === 'live' || usedLiveFallback) {
-    messages = liveResults;
-    outputSource = 'live';
-  } else {
-    messages = archivedResults;
-  }
+  const { messages, source: outputSource } = selectMessageResults({
+    source: resolvedSource,
+    archivedResults,
+    liveResults,
+    usedLiveFallback,
+    limit,
+  });
 
   return { source: outputSource, returned: messages.length, messages, usedLiveFallback };
 }
@@ -481,9 +525,6 @@ async function messagesGet(ctx, args = {}) {
   const resolvedSource = resolveSource(args.source);
   const channelId = args.channelId;
   const messageId = args.messageId;
-  let message = null;
-  let resolvedFrom = null;
-  let usedLiveFallback = false;
 
   const fetchLive = async () => {
     const live = await ctx.telegramClient.getMessageById(channelId, messageId);
@@ -497,34 +538,17 @@ async function messagesGet(ctx, args = {}) {
     };
   };
 
-  if (resolvedSource === 'live' || resolvedSource === 'both') {
-    message = await fetchLive();
-    if (message) {
-      resolvedFrom = 'live';
-    }
-  }
-
-  if (!message && (resolvedSource === 'archive' || resolvedSource === 'both')) {
+  const fetchArchive = async () => {
     const archived = ctx.messageSyncService.getArchivedMessage({ channelId, messageId });
-    if (archived) {
-      message = { ...archived, source: 'archive' };
-      resolvedFrom = 'archive';
-    }
-  }
+    return archived ? { ...archived, source: 'archive' } : null;
+  };
 
-  if (!message && resolvedSource === 'archive') {
-    message = await fetchLive();
-    if (message) {
-      resolvedFrom = 'live';
-      usedLiveFallback = true;
-    }
-  }
-
-  if (!message) {
+  const resolved = await resolveFromSource({ source: resolvedSource, fetchLive, fetchArchive });
+  if (!resolved) {
     throw new Error('Message not found.');
   }
 
-  return { source: resolvedFrom ?? resolvedSource, message, usedLiveFallback };
+  return { source: resolved.source, message: resolved.result, usedLiveFallback: resolved.usedLiveFallback };
 }
 
 // args: { channelId, messageId, before?, after?, source? }.
@@ -535,9 +559,6 @@ async function messagesContext(ctx, args = {}) {
   const messageId = args.messageId;
   const safeBefore = Number.isFinite(args.before) ? args.before : 20;
   const safeAfter = Number.isFinite(args.after) ? args.after : 20;
-  let context = null;
-  let resolvedFrom = null;
-  let usedLiveFallback = false;
 
   const fetchLive = async () => {
     const liveContext = await ctx.telegramClient.getMessageContext(channelId, messageId, {
@@ -559,43 +580,29 @@ async function messagesContext(ctx, args = {}) {
     };
   };
 
-  if (resolvedSource === 'live' || resolvedSource === 'both') {
-    context = await fetchLive();
-    if (context) {
-      resolvedFrom = 'live';
-    }
-  }
-
-  if (!context && (resolvedSource === 'archive' || resolvedSource === 'both')) {
+  const fetchArchive = async () => {
     const archiveContext = ctx.messageSyncService.getArchivedMessageContext({
       channelId,
       messageId,
       before: safeBefore,
       after: safeAfter,
     });
-    if (archiveContext.target) {
-      context = {
-        target: { ...archiveContext.target, source: 'archive' },
-        before: archiveContext.before.map((message) => ({ ...message, source: 'archive' })),
-        after: archiveContext.after.map((message) => ({ ...message, source: 'archive' })),
-      };
-      resolvedFrom = 'archive';
+    if (!archiveContext.target) {
+      return null;
     }
-  }
+    return {
+      target: { ...archiveContext.target, source: 'archive' },
+      before: archiveContext.before.map((message) => ({ ...message, source: 'archive' })),
+      after: archiveContext.after.map((message) => ({ ...message, source: 'archive' })),
+    };
+  };
 
-  if (!context && resolvedSource === 'archive') {
-    context = await fetchLive();
-    if (context) {
-      resolvedFrom = 'live';
-      usedLiveFallback = true;
-    }
-  }
-
-  if (!context) {
+  const resolved = await resolveFromSource({ source: resolvedSource, fetchLive, fetchArchive });
+  if (!resolved) {
     throw new Error('Message not found.');
   }
 
-  return { source: resolvedFrom ?? resolvedSource, ...context, usedLiveFallback };
+  return { source: resolved.source, ...resolved.result, usedLiveFallback: resolved.usedLiveFallback };
 }
 
 // --- send ---
@@ -672,15 +679,6 @@ async function sendFile(ctx, args = {}) {
   );
 }
 
-// --- media ---
-
-// args: { channelId, messageId, outputPath? }. Returns the download descriptor.
-async function mediaDownload(ctx, args = {}) {
-  return ctx.telegramClient.downloadMessageMedia(args.channelId, args.messageId, {
-    outputPath: args.outputPath,
-  });
-}
-
 // --- topics ---
 
 // args: { channelId, query?, limit? }. Lists/searches forum topics and refreshes
@@ -704,20 +702,6 @@ async function tagsSet(ctx, args = {}) {
     source: args.source,
   });
   return { channelId: args.chat, tags: finalTags };
-}
-
-// args: { chat, source? }. Lists a channel's tags.
-async function tagsList(ctx, args = {}) {
-  return ctx.messageSyncService.listChannelTags(args.chat, { source: args.source });
-}
-
-// args: { tag, source?, limit? }. Lists channels carrying a tag.
-async function tagsSearch(ctx, args = {}) {
-  const limit = args.limit ?? 100;
-  return ctx.messageSyncService.listTaggedChannels(args.tag, {
-    source: args.source,
-    limit,
-  });
 }
 
 // args: { channelIds?, limit?, source?, refreshMetadata? }. Auto-tags channels.
@@ -821,19 +805,6 @@ async function contactsNotesSet(ctx, args = {}) {
 
 // --- groups ---
 
-// args: { query?, limit? }. Lists group chats and supergroups.
-async function groupsList(ctx, args = {}) {
-  return ctx.telegramClient.listGroups({
-    query: args.query,
-    limit: args.limit ?? 100,
-  });
-}
-
-// args: { chat }. Returns group info and metadata.
-async function groupsInfo(ctx, args = {}) {
-  return ctx.telegramClient.getGroupInfo(args.chat);
-}
-
 // args: { chat, name }. Renames a group.
 async function groupsRename(ctx, args = {}) {
   await ctx.telegramClient.renameGroup(args.chat, args.name);
@@ -852,20 +823,10 @@ async function groupMembersRemove(ctx, args = {}) {
   return { channelId: args.chat, ...result };
 }
 
-// args: { chat }. Returns the primary invite-link descriptor.
-async function getGroupInviteLink(ctx, args = {}) {
-  return ctx.telegramClient.getGroupInviteLink(args.chat);
-}
-
 // args: { chat }. Revokes the primary invite link, returning the new descriptor.
 async function revokeGroupInviteLink(ctx, args = {}) {
   const existing = await ctx.telegramClient.getGroupInviteLink(args.chat);
   return ctx.telegramClient.revokeGroupInviteLink(args.chat, existing);
-}
-
-// args: { invite }. Joins a group via invite link/code.
-async function groupsJoin(ctx, args = {}) {
-  return ctx.telegramClient.joinGroup(args.invite);
 }
 
 // args: { chat }. Leaves a group.
@@ -875,16 +836,6 @@ async function groupsLeave(ctx, args = {}) {
 }
 
 // --- folders ---
-
-// args: {}. Lists all chat folders.
-async function foldersList(ctx) {
-  return ctx.telegramClient.getFolders();
-}
-
-// args: { folder, resolve? }. Shows folder details.
-async function foldersShow(ctx, args = {}) {
-  return ctx.telegramClient.showFolder(args.folder, { resolve: args.resolve });
-}
 
 // args: folder definition fields. Creates a folder.
 async function foldersCreate(ctx, args = {}) {
@@ -905,41 +856,45 @@ async function foldersCreate(ctx, args = {}) {
   });
 }
 
-// args: { folder, modification }. Edits a folder.
-async function foldersEdit(ctx, args = {}) {
-  return ctx.telegramClient.editFolder(args.folder, args.modification ?? {});
-}
+// --- passthrough ops ---
 
-// args: { folder }. Deletes a folder.
-async function foldersDelete(ctx, args = {}) {
-  return ctx.telegramClient.deleteFolder(args.folder);
-}
+// Simple ops are a 1:1 forward to a warm service method whose result is returned
+// unchanged. Each entry maps the op's args object to that method's call
+// arguments; PASSTHROUGHS expands into handlers with the same (ctx, args) =>
+// result contract as the hand-written ops. Anything that reshapes a result,
+// applies defaults beyond a plain map, or calls more than one method stays a
+// hand-written composite above.
+const PASSTHROUGHS = {
+  channelMarkRead: ['telegramClient', 'markChannelRead', (a) => [a.chat, a.messageId]],
+  mediaDownload: ['telegramClient', 'downloadMessageMedia', (a) => [a.channelId, a.messageId, { outputPath: a.outputPath }]],
+  tagsList: ['messageSyncService', 'listChannelTags', (a) => [a.chat, { source: a.source }]],
+  tagsSearch: ['messageSyncService', 'listTaggedChannels', (a) => [a.tag, { source: a.source, limit: a.limit ?? 100 }]],
+  groupsList: ['telegramClient', 'listGroups', (a) => [{ query: a.query, limit: a.limit ?? 100 }]],
+  groupsInfo: ['telegramClient', 'getGroupInfo', (a) => [a.chat]],
+  getGroupInviteLink: ['telegramClient', 'getGroupInviteLink', (a) => [a.chat]],
+  groupsJoin: ['telegramClient', 'joinGroup', (a) => [a.invite]],
+  foldersList: ['telegramClient', 'getFolders', () => []],
+  foldersShow: ['telegramClient', 'showFolder', (a) => [a.folder, { resolve: a.resolve }]],
+  foldersEdit: ['telegramClient', 'editFolder', (a) => [a.folder, a.modification ?? {}]],
+  foldersDelete: ['telegramClient', 'deleteFolder', (a) => [a.folder]],
+  foldersReorder: ['telegramClient', 'setFoldersOrder', (a) => [a.ids]],
+  foldersChatsAdd: ['telegramClient', 'addChatToFolder', (a) => [a.folder, a.chat]],
+  foldersChatsRemove: ['telegramClient', 'removeChatFromFolder', (a) => [a.folder, a.chat]],
+  foldersJoin: ['telegramClient', 'joinChatlist', (a) => [a.link]],
+};
 
-// args: { ids }. Reorders folders.
-async function foldersReorder(ctx, args = {}) {
-  return ctx.telegramClient.setFoldersOrder(args.ids);
-}
-
-// args: { folder, chat }. Adds a chat to a folder.
-async function foldersChatsAdd(ctx, args = {}) {
-  return ctx.telegramClient.addChatToFolder(args.folder, args.chat);
-}
-
-// args: { folder, chat }. Removes a chat from a folder.
-async function foldersChatsRemove(ctx, args = {}) {
-  return ctx.telegramClient.removeChatFromFolder(args.folder, args.chat);
-}
-
-// args: { link }. Joins a shared folder via invite link.
-async function foldersJoin(ctx, args = {}) {
-  return ctx.telegramClient.joinChatlist(args.link);
+function buildPassthroughOps(table) {
+  const ops = {};
+  for (const [name, [target, method, mapArgs]] of Object.entries(table)) {
+    ops[name] = (ctx, args = {}) => ctx[target][method](...mapArgs(args));
+  }
+  return ops;
 }
 
 export const OPERATIONS = {
   listChannels,
   channelShow,
   channelSetSync,
-  channelMarkRead,
   messagesList,
   messagesSearch,
   messagesGet,
@@ -947,11 +902,8 @@ export const OPERATIONS = {
   sendText,
   sendPhoto,
   sendFile,
-  mediaDownload,
   topicsList,
   tagsSet,
-  tagsList,
-  tagsSearch,
   tagsAuto,
   metadataGet,
   metadataRefresh,
@@ -962,28 +914,18 @@ export const OPERATIONS = {
   contactsTagsAdd,
   contactsTagsRemove,
   contactsNotesSet,
-  groupsList,
-  groupsInfo,
   groupsRename,
   groupMembersAdd,
   groupMembersRemove,
-  getGroupInviteLink,
   revokeGroupInviteLink,
-  groupsJoin,
   groupsLeave,
-  foldersList,
-  foldersShow,
   foldersCreate,
-  foldersEdit,
-  foldersDelete,
-  foldersReorder,
-  foldersChatsAdd,
-  foldersChatsRemove,
-  foldersJoin,
+  ...buildPassthroughOps(PASSTHROUGHS),
 };
 
-// Re-exported so the CLI and MCP layers can render live/merged message sets
-// without re-deriving the shared formatting the ops produce.
+// Shared building blocks the ops use, re-exported so other layers can render
+// live/merged message sets with the same formatting the ops produce rather than
+// re-deriving it.
 export {
   buildSendSuccessPayload,
   formatLiveMessage,

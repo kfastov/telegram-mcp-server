@@ -2601,6 +2601,34 @@ function resolveSendAliases(options) {
   if (!options.message && options.text) options.message = options.text;
 }
 
+// Parse and build the send args shared by every send command (delivery target,
+// threading, parse mode, flood/timeout knobs), in the same validation order
+// across commands. The schedule is parsed last by the caller so a media command
+// can run its --parse-mode/--caption check first. Per-command payload fields
+// (text, photo + caption, file + filename, ...) are added by the caller. Returns
+// the parsed retries alongside the args so the handler can classify a later error.
+function buildCommonSendArgs(options, timeoutMs) {
+  // Parse in the same order the per-command handlers always have, so a malformed
+  // flag reports the same first error regardless of command.
+  const parseMode = parseSendParseMode(options.parseMode);
+  const retries = parseNonNegativeInt(options.retries, '--retries') ?? DEFAULT_SEND_RETRIES;
+  const retryBackoff = parseRetryBackoff(options.retryBackoff);
+  const topicId = parsePositiveInt(options.topic, '--topic');
+  const replyToMessageId = parsePositiveInt(options.replyTo, '--reply-to');
+  const args = {
+    chat: options.to,
+    topicId,
+    replyToMessageId,
+    parseMode,
+    silent: options.silent || false,
+    noforwards: options.forwards === false,
+    retries,
+    retryBackoff,
+    timeoutMs,
+  };
+  return { args, retries };
+}
+
 function normalizeSendCommandError(error, { method, retries, attempt = 1 } = {}) {
   if (error instanceof SendCommandError) return error;
   if (error instanceof TypeError || error instanceof ReferenceError || error instanceof SyntaxError || error instanceof RangeError) return error;
@@ -2655,30 +2683,18 @@ async function runSendText(globalFlags, options = {}) {
   try {
     if (!options.to) throw new Error('--to is required');
     if (!options.message) throw new Error('--message is required');
-    const parseMode = parseSendParseMode(options.parseMode);
-    retries = parseNonNegativeInt(options.retries, '--retries') ?? DEFAULT_SEND_RETRIES;
-    const retryBackoff = parseRetryBackoff(options.retryBackoff);
-    const topicId = parsePositiveInt(options.topic, '--topic');
-    const replyToMessageId = parsePositiveInt(options.replyTo, '--reply-to');
-    const scheduleDate = parseScheduleDate(options.schedule);
+    const common = buildCommonSendArgs(options, timeoutMs);
+    retries = common.retries;
     const { result, attempts } = await runSendOperation(globalFlags, {
       op: 'sendText',
       method,
       retries,
       invokeTimeoutMs: timeoutMs,
       args: {
-        chat: options.to,
+        ...common.args,
         text: options.message,
-        topicId,
-        replyToMessageId,
-        parseMode,
         noPreview: options.noPreview,
-        silent: options.silent || false,
-        noforwards: options.forwards === false,
-        scheduleDate,
-        retries,
-        retryBackoff,
-        timeoutMs,
+        scheduleDate: parseScheduleDate(options.schedule),
       },
     });
     const payload = { channelId: options.to, ...result };
@@ -2704,35 +2720,23 @@ async function runSendPhoto(globalFlags, options = {}) {
   try {
     if (!options.to) throw new Error('--to is required');
     if (!options.photo) throw new Error('--photo is required');
-    const parseMode = parseSendParseMode(options.parseMode);
-    if (parseMode && !(typeof options.caption === 'string' && options.caption.trim())) {
+    if (parseSendParseMode(options.parseMode) && !(typeof options.caption === 'string' && options.caption.trim())) {
       throw new Error('--parse-mode requires --caption for send photo');
     }
-    retries = parseNonNegativeInt(options.retries, '--retries') ?? DEFAULT_SEND_RETRIES;
-    const retryBackoff = parseRetryBackoff(options.retryBackoff);
-    const topicId = parsePositiveInt(options.topic, '--topic');
-    const replyToMessageId = parsePositiveInt(options.replyTo, '--reply-to');
-    const scheduleDate = parseScheduleDate(options.schedule);
+    const common = buildCommonSendArgs(options, timeoutMs);
+    retries = common.retries;
     const { result, attempts } = await runSendOperation(globalFlags, {
       op: 'sendPhoto',
       method,
       retries,
       invokeTimeoutMs: timeoutMs,
       args: {
-        chat: options.to,
+        ...common.args,
         photo: options.photo,
         caption: options.caption,
-        topicId,
-        replyToMessageId,
-        parseMode,
-        silent: options.silent || false,
-        noforwards: options.forwards === false,
         captionAbove: options.captionAbove || false,
         spoiler: options.spoiler || false,
-        scheduleDate,
-        retries,
-        retryBackoff,
-        timeoutMs,
+        scheduleDate: parseScheduleDate(options.schedule),
       },
     });
     if (globalFlags.json) {
@@ -2754,37 +2758,25 @@ async function runSendFile(globalFlags, options = {}) {
   try {
     if (!options.to) throw new Error('--to is required');
     if (!options.file) throw new Error('--file is required');
-    const parseMode = parseSendParseMode(options.parseMode);
-    if (parseMode && !(typeof options.caption === 'string' && options.caption.trim())) {
+    if (parseSendParseMode(options.parseMode) && !(typeof options.caption === 'string' && options.caption.trim())) {
       throw new Error('--parse-mode requires --caption for send file');
     }
-    retries = parseNonNegativeInt(options.retries, '--retries') ?? DEFAULT_SEND_RETRIES;
-    const retryBackoff = parseRetryBackoff(options.retryBackoff);
-    const topicId = parsePositiveInt(options.topic, '--topic');
-    const replyToMessageId = parsePositiveInt(options.replyTo, '--reply-to');
-    const scheduleDate = parseScheduleDate(options.schedule);
+    const common = buildCommonSendArgs(options, timeoutMs);
+    retries = common.retries;
     const { result, attempts } = await runSendOperation(globalFlags, {
       op: 'sendFile',
       method,
       retries,
       invokeTimeoutMs: timeoutMs,
       args: {
-        chat: options.to,
+        ...common.args,
         file: options.file,
         caption: options.caption,
         filename: options.filename,
-        topicId,
-        replyToMessageId,
-        parseMode,
-        silent: options.silent || false,
-        noforwards: options.forwards === false,
         captionAbove: options.captionAbove || false,
         spoiler: options.spoiler || false,
-        scheduleDate,
         forceDocument: options.forceDocument || false,
-        retries,
-        retryBackoff,
-        timeoutMs,
+        scheduleDate: parseScheduleDate(options.schedule),
       },
     });
     const payload = { channelId: options.to, ...result };
