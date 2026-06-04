@@ -68,7 +68,7 @@ tgcli backfill wait                            # block until the queue drains
 tgcli backfill cancel --chat @channel          # stop a chat's backfills
 tgcli channels watch --chat @channel           # subscribe a chat for archiving (queues a backfill)
 tgcli channels unwatch --chat @channel         # stop archiving a chat
-tgcli backfill --follow                         # legacy in-process sync (`sync` is a silent alias)
+tgcli backfill --follow                         # track the server's queue to completion (`sync` is a silent alias)
 tgcli service install
 tgcli service start
 ```

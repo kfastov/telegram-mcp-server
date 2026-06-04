@@ -273,9 +273,11 @@ describe('send command default timeout (CLI integration)', () => {
   });
 
   it('(b) a long-running command (sync) is NOT bounded by the send default', async () => {
-    // refreshChannelsFromDialogs hangs forever; if the send default leaked into
-    // sync it would reject at 30s. It must not.
-    services.current = makeFakeServices({ refreshImpl: () => new Promise(() => {}) });
+    // The queue never drains (one job stays in-flight forever); if the send
+    // default leaked into sync it would reject at 30s. It must not.
+    services.current = makeFakeServices();
+    services.current.messageSyncService.getJobCounts = vi.fn(() => ({ pending: 0, inProgress: 1 }));
+    services.current.messageSyncService.listJobs = vi.fn(() => []);
 
     let settled = false;
     const done = runProgram(['sync', '--once']).then(
@@ -283,7 +285,7 @@ describe('send command default timeout (CLI integration)', () => {
       () => { settled = true; },
     );
 
-    // Advance to 2x the send default; sync must still be running.
+    // Advance to 2x the send default; sync must still be tracking the queue.
     await vi.advanceTimersByTimeAsync(60000);
     expect(settled).toBe(false);
     expect(process.exitCode).toBeUndefined();

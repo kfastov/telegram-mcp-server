@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const services = vi.hoisted(() => ({ current: null }));
-const control = vi.hoisted(() => ({ ensureServer: null, invoke: null }));
+const control = vi.hoisted(() => ({ ensureServer: null, invoke: null, enqueueBackfill: null }));
 
 vi.mock('../core/services.js', () => ({
   createServices: vi.fn(() => services.current),
@@ -31,8 +31,9 @@ vi.mock('../core/control-client.js', () => ({
   ensureServer: (...args) => control.ensureServer(...args),
   invoke: (...args) => control.invoke(...args),
   pingServer: vi.fn(),
-  enqueueBackfill: vi.fn(),
+  enqueueBackfill: (...args) => control.enqueueBackfill(...args),
   cancelBackfill: vi.fn(),
+  retryBackfill: vi.fn(),
 }));
 
 vi.mock('../store-lock.js', () => ({
@@ -85,6 +86,12 @@ describe('backfill is a canonical alias of sync', () => {
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    control.ensureServer = vi.fn().mockResolvedValue({ ok: true });
+    control.enqueueBackfill = vi.fn(async (_storeDir, { chatId }) => ({
+      jobId: 1,
+      channelId: chatId,
+      status: 'pending',
+    }));
   });
 
   afterEach(() => {
@@ -118,17 +125,24 @@ describe('backfill is a canonical alias of sync', () => {
     expect(backfillOut.join('\n')).toContain('QUEUE:');
   });
 
-  it('`backfill jobs add` resolves the nested subcommand and queues a job (like `sync jobs add`)', async () => {
+  it('`backfill jobs add` resolves the nested subcommand and queues a job on the server (like `sync jobs add`)', async () => {
     services.current = makeFakeServices();
     await runProgram(['backfill', 'jobs', 'add', '--chat', '@chan']);
-    expect(services.current.messageSyncService.addJob).toHaveBeenCalledWith('@chan', {
+    expect(control.ensureServer).toHaveBeenCalledWith('/tmp/tgcli-test-store', { idleExit: '60s' });
+    expect(control.enqueueBackfill).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      chatId: '@chan',
       depth: null,
       minDate: null,
     });
+    // No in-process job/queue work.
+    expect(services.current.messageSyncService.addJob).not.toHaveBeenCalled();
+    expect(services.current.messageSyncService.processQueue).not.toHaveBeenCalled();
 
+    control.enqueueBackfill.mockClear();
     services.current = makeFakeServices();
     await runProgram(['sync', 'jobs', 'add', '--chat', '@chan']);
-    expect(services.current.messageSyncService.addJob).toHaveBeenCalledWith('@chan', {
+    expect(control.enqueueBackfill).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
+      chatId: '@chan',
       depth: null,
       minDate: null,
     });

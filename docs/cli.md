@@ -28,8 +28,11 @@ Store location: OS app data dir (override with TGCLI_STORE).
 MCP: disabled by default (set `mcp.enabled` in config.json to true to serve MCP).
 
 ## auth
-- auth [--qr] [--qr-file <path>] [--force-sms] [--follow] [--idle-exit <duration>] [--download-media]
-  - Interactive login. Use --qr for QR code login (scan in Telegram app).
+- auth [--qr] [--qr-file <path>] [--force-sms]
+  - Interactive login + session bootstrap only: writes the session and exits. It
+    does not sync or run a worker. Archiving runs in the always-on server, which
+    auto-starts on the next command that needs it (or via `tgcli server`).
+  - --qr for QR code login (scan in Telegram app).
   - --qr-file saves the QR code as a PNG image (useful for agents).
   - --force-sms forces code delivery via SMS instead of in-app notification.
 - auth status
@@ -64,11 +67,17 @@ one-shot client.
 - backfill cancel --chat <id|username>
   - Cancel a chat's backfills via the server when one is up; falls back to a
     direct cancel (same as `backfill jobs cancel --channel`) when none is.
-- backfill (no --chat): legacy in-process sync (alias: `sync`)
-  - Flags: --once | --follow, --idle-exit 30s, --download-media, --refresh-contacts, --refresh-groups
+- backfill (no --chat): track the server's queue (alias: `sync`)
+  - `--follow`: auto-start the server if needed, track the queue with live
+    progress, and exit once it drains. The server keeps running on its own
+    (realtime continues while it is up / has watched chats).
+  - `--once`: deprecated alias of `backfill wait` — drain quietly and exit.
+  - With no flag: prints usage (there is no queue to track).
 - backfill jobs list [--status] [--limit] [--channel]
 - backfill jobs add --chat <id|username> [--min-date ISO] [--depth N]
+  - Enqueue a job on the server (auto-starting it); the server's queue processes it.
 - backfill jobs retry [--job-id] [--channel] [--all-errors]
+  - Reset errored job(s) to pending on the server; the server's queue reprocesses them.
 - backfill jobs cancel --job-id|--channel
 - `sync` remains a silent alias of `backfill` (and every subcommand), so existing `sync …` invocations keep working unchanged.
 

@@ -10,7 +10,7 @@ import { Command, Option } from 'commander';
 
 import { acquireStoreLock, acquireReadLock, readStoreLock } from './store-lock.js';
 import { loadConfig, normalizeConfig, saveConfig, validateConfig } from './core/config.js';
-import { createMessageSyncService, createServices, createTelegramClient } from './core/services.js';
+import { createServices, createTelegramClient } from './core/services.js';
 import { withCommand, runWithTimeout, runOperation } from './core/command-context.js';
 import {
   buildSendErrorPayload,
@@ -27,6 +27,7 @@ import {
   enqueueBackfill,
   ensureServer,
   pingServer,
+  retryBackfill,
 } from './core/control-client.js';
 
 const CLI_PATH = fileURLToPath(import.meta.url);
@@ -74,7 +75,6 @@ function buildProgram() {
 
   const auth = program.command('auth').description('Authentication and session setup');
   auth
-    .option('--follow', 'Continue syncing after login')
     .option('--force-sms', 'Force SMS code delivery instead of in-app')
     .option('--qr', 'Use QR-code login flow instead of confirmation code')
     .option('--qr-file <path>', 'Save QR code as PNG image file')
@@ -131,16 +131,16 @@ function buildProgram() {
     .alias('sync')
     .description('Archive backfill and realtime sync');
   sync
-    // Server-executed one-shot client (issue #30/#26): `--chat` enqueues a
-    // backfill on the always-on server (auto-starting it) and follows progress.
+    // `--chat` enqueues a single-chat backfill on the always-on server
+    // (auto-starting it) and follows progress.
     .option('--chat <id|username>', 'Backfill a single chat via the control server')
     .option('--depth <n>', 'Maximum messages to backfill (with --chat)')
     .option('--min-date <iso>', 'Earliest date to backfill (with --chat)')
     .option('--background', 'Enqueue and return immediately (with --chat)')
-    // Legacy in-process sync flags (no --chat).
-    .option('--once', 'Run once and exit')
-    .option('--follow', 'Keep syncing realtime updates')
-    .option('--idle-exit <duration>', 'Exit after idle period')
+    // Without --chat: drain the server's queue. --follow tracks progress to the
+    // foreground; --once is a deprecated alias of `backfill wait`.
+    .option('--follow', 'Track the backfill queue until it drains, then exit')
+    .addOption(new Option('--once', 'Deprecated alias of `backfill wait`').hideHelp())
     .action(withGlobalOptions((globalFlags, options) => runBackfill(globalFlags, options)));
   sync
     .command('status')
@@ -1284,40 +1284,6 @@ function normalizeInviteCode(value) {
   return `https://t.me/joinchat/${trimmed}`;
 }
 
-async function withShutdown(handler) {
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) return;
-    stopping = true;
-    try {
-      await handler();
-    } finally {
-      process.exit(0);
-    }
-  };
-  process.on('SIGINT', () => void stop());
-  process.on('SIGTERM', () => void stop());
-}
-
-async function waitForIdle(service, idleExitMs) {
-  let idleStart = null;
-  while (true) {
-    const stats = service.getQueueStats();
-    const active = stats.pending + stats.in_progress;
-    if (!stats.processing && active === 0) {
-      if (!idleStart) {
-        idleStart = Date.now();
-      }
-      if (Date.now() - idleStart >= idleExitMs) {
-        return;
-      }
-    } else {
-      idleStart = null;
-    }
-    await delay(500);
-  }
-}
-
 async function runAuthStatus(globalFlags) {
   const timeoutMs = globalFlags.timeoutMs;
   return runWithTimeout(async () => {
@@ -1394,18 +1360,14 @@ async function runAuthLogout(globalFlags) {
   }, timeoutMs);
 }
 
+// Interactive login + session bootstrap only: write the session and exit. Archive
+// sync and the queue run in the always-on server, which auto-starts on the next
+// command that needs it (or via `tgcli server`).
 export async function runAuthLogin(globalFlags, options = {}) {
   const timeoutMs = globalFlags.timeoutMs;
   let release = null;
   let telegramClient = null;
-  let messageSyncService = null;
-  let keepRunning = false;
   const cleanup = async () => {
-    if (messageSyncService) {
-      const currentService = messageSyncService;
-      messageSyncService = null;
-      await currentService.shutdown();
-    }
     if (telegramClient) {
       const currentClient = telegramClient;
       telegramClient = null;
@@ -1429,23 +1391,11 @@ export async function runAuthLogin(globalFlags, options = {}) {
         useQr: options.qr,
         qrFilePath: options.qrFile,
         json: globalFlags.json,
-        disableUpdates: !options.follow,
+        disableUpdates: true,
       }));
       const loginSuccess = await telegramClient.login();
       if (!loginSuccess) {
         throw new Error('Failed to login to Telegram.');
-      }
-      if (options.follow) {
-        ({ messageSyncService } = createMessageSyncService(telegramClient, { storeDir }));
-        await messageSyncService.refreshChannelsFromDialogs();
-        await telegramClient.startUpdates();
-        messageSyncService.startRealtimeSync();
-        messageSyncService.resumePendingJobs();
-        await withShutdown(async () => {
-          await cleanup();
-        });
-        keepRunning = true;
-        return;
       }
 
       if (globalFlags.json) {
@@ -1454,9 +1404,7 @@ export async function runAuthLogin(globalFlags, options = {}) {
         console.log(`Authenticated. ${AUTH_SYNC_HINT}`);
       }
     } finally {
-      if (!keepRunning) {
-        await cleanup();
-      }
+      await cleanup();
     }
   }, timeoutMs, cleanup);
 }
@@ -1632,11 +1580,10 @@ function writeProgress(globalFlags, line) {
   }
 }
 
-// Server-executed backfill (issue #30/#26). With `--chat`, enqueue on the
-// always-on control server (auto-starting it) and either return the job id
-// (`--background`) or follow progress in the foreground. Without `--chat`, fall
-// through to the unchanged in-process legacy sync (so `sync`/`backfill --once`
-// /`--follow` keep working).
+// With `--chat`, enqueue a single-chat backfill on the always-on control server
+// (auto-starting it) and either return the job id (`--background`) or follow
+// progress in the foreground. Without `--chat`, delegate to the queue-draining
+// path (`--follow`/`--once`/bare usage).
 async function runBackfill(globalFlags, options = {}) {
   if (!options.chat) {
     return runSync(globalFlags, options);
@@ -1741,26 +1688,33 @@ async function runBackfillCount(globalFlags) {
   }, globalFlags.timeoutMs);
 }
 
-// Start the server if needed (so the queue actually drains) and wait until no
-// pending/in-progress backfills remain, showing progress to stderr.
+// Start the server if needed (so the queue actually drains) and poll under brief
+// read snapshots until no pending/in-progress backfills remain, writing per-chat
+// progress to stderr along the way. The server keeps running on its own (realtime
+// continues while it is up / has watched chats); this only tracks the queue.
+async function drainBackfillQueue(globalFlags, storeDir) {
+  await ensureServer(storeDir, { idleExit: '60s' });
+  while (true) {
+    const { active, jobs } = withReadSnapshot(storeDir, (service) => {
+      const counts = service.getJobCounts();
+      const inFlight = service.listJobs({ status: 'in_progress', limit: 50 });
+      return { active: counts.pending + counts.inProgress, jobs: inFlight };
+    });
+    for (const job of jobs) {
+      writeProgress(globalFlags, jobProgressLine(job));
+    }
+    if (active === 0) {
+      break;
+    }
+    await delay(1000);
+  }
+}
+
+// `backfill wait`: start the server if needed and track the queue to completion.
 async function runBackfillWait(globalFlags) {
   return runWithTimeout(async () => {
     const storeDir = resolveStoreDir();
-    await ensureServer(storeDir, { idleExit: '60s' });
-    while (true) {
-      const { active, jobs } = withReadSnapshot(storeDir, (service) => {
-        const counts = service.getJobCounts();
-        const inFlight = service.listJobs({ status: 'in_progress', limit: 50 });
-        return { active: counts.pending + counts.inProgress, jobs: inFlight };
-      });
-      for (const job of jobs) {
-        writeProgress(globalFlags, jobProgressLine(job));
-      }
-      if (active === 0) {
-        break;
-      }
-      await delay(1000);
-    }
+    await drainBackfillQueue(globalFlags, storeDir);
     if (globalFlags.json) {
       writeJson({ ok: true, drained: true });
     } else if (!globalFlags.quiet) {
@@ -1801,52 +1755,20 @@ async function runBackfillCancel(globalFlags, options = {}) {
   }, globalFlags.timeoutMs);
 }
 
+// Bare `backfill`/`sync` (no --chat). Archiving runs in the always-on server; this
+// only tracks its queue. `--follow` and `--once` both drain the queue and exit —
+// they never run a worker or hold the store write lock. With no flag, there is
+// nothing to track, so show usage.
 async function runSync(globalFlags, options = {}) {
-  const timeoutMs = globalFlags.timeoutMs;
-  return runWithTimeout(async () => {
-    const storeDir = resolveStoreDir();
-    const release = acquireStoreLock(storeDir);
-    const { telegramClient, messageSyncService } = createServices({ storeDir });
-    const idleExitMs = parseDuration(options.idleExit || '30s');
-    const follow = options.follow || !options.once;
-
-    try {
-      if (!(await telegramClient.isAuthorized().catch(() => false))) {
-        throw new Error('Not authenticated. Run `node cli.js auth` first.');
-      }
-
-      await messageSyncService.refreshChannelsFromDialogs();
-      messageSyncService.resumePendingJobs();
-
-      if (follow) {
-        await telegramClient.startUpdates();
-        messageSyncService.startRealtimeSync();
-        if (!globalFlags.json) {
-          console.log('Sync running. Press Ctrl+C to stop.');
-        }
-        await withShutdown(async () => {
-          await messageSyncService.shutdown();
-          await telegramClient.destroy();
-          release();
-        });
-        return;
-      }
-
-      await waitForIdle(messageSyncService, idleExitMs);
-      const stats = messageSyncService.getQueueStats();
-      if (globalFlags.json) {
-        writeJson({ ok: true, mode: 'once', queue: stats });
-      } else {
-        console.log('Sync complete.');
-      }
-    } finally {
-      if (!follow) {
-        await messageSyncService.shutdown();
-        await telegramClient.destroy();
-        release();
-      }
+  if (!options.follow && !options.once) {
+    const backfill = CLI_PROGRAM.commands.find((command) => command.name() === 'backfill');
+    if (backfill) {
+      process.stderr.write(backfill.helpInformation());
     }
-  }, timeoutMs);
+    return;
+  }
+  // `--once` is a deprecated alias of `backfill wait`: drain quietly and exit.
+  return runBackfillWait(globalFlags);
 }
 
 async function runServer(globalFlags, options = {}) {
@@ -2308,28 +2230,31 @@ async function runSyncJobsList(globalFlags, options = {}) {
   });
 }
 
+// Enqueue a job on the always-on server (auto-starting it); the server's queue
+// processes it. Returns immediately after enqueue.
 async function runSyncJobsAdd(globalFlags, options = {}) {
   if (!options.chat) {
     throw new Error('--chat is required');
   }
-  return withCommand(globalFlags, { need: 'worker', lock: 'write' }, async ({ telegramClient, messageSyncService }) => {
-    if (!(await telegramClient.isAuthorized().catch(() => false))) {
-      throw new Error('Not authenticated. Run `node cli.js auth` first.');
-    }
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
     const depth = parsePositiveInt(options.depth, '--depth');
-    const job = messageSyncService.addJob(options.chat, {
+    await ensureServer(storeDir, { idleExit: '60s' });
+    const job = await enqueueBackfill(storeDir, {
+      chatId: options.chat,
       depth,
       minDate: options.minDate ?? null,
     });
-    void messageSyncService.processQueue();
     if (globalFlags.json) {
       writeJson(job);
     } else {
-      console.log(`Job scheduled for ${job.channel_id} (#${job.id}).`);
+      console.log(`Job scheduled for ${job.channelId} (#${job.jobId}).`);
     }
-  });
+  }, globalFlags.timeoutMs);
 }
 
+// Reset errored job(s) to pending on the always-on server (auto-starting it); the
+// server's queue reprocesses them.
 async function runSyncJobsRetry(globalFlags, options = {}) {
   const jobId = parsePositiveInt(options.jobId, '--job-id');
   const channelId = options.channel ?? null;
@@ -2340,22 +2265,16 @@ async function runSyncJobsRetry(globalFlags, options = {}) {
   if (allErrors && (jobId || channelId)) {
     throw new Error('Use --all-errors without --job-id/--channel');
   }
-  return withCommand(globalFlags, { need: 'worker', lock: 'write' }, async ({ telegramClient, messageSyncService }) => {
-    const result = messageSyncService.retryJobs({
-      jobId,
-      channelId,
-      allErrors,
-    });
-    const authed = await telegramClient.isAuthorized().catch(() => false);
-    if (authed && result.updated > 0) {
-      void messageSyncService.processQueue();
-    }
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
+    await ensureServer(storeDir, { idleExit: '60s' });
+    const result = await retryBackfill(storeDir, { jobId, channelId, allErrors });
     if (globalFlags.json) {
       writeJson(result);
     } else {
       console.log(`Re-queued ${result.updated} job(s).`);
     }
-  });
+  }, globalFlags.timeoutMs);
 }
 
 async function runSyncJobsCancel(globalFlags, options = {}) {
@@ -2686,19 +2605,6 @@ function normalizeSendCommandError(error, { method, retries, attempt = 1 } = {})
   if (error instanceof SendCommandError) return error;
   if (error instanceof TypeError || error instanceof ReferenceError || error instanceof SyntaxError || error instanceof RangeError) return error;
   return new SendCommandError(classifySendError(error, { method, retries, attempt }));
-}
-
-function logSendRetry(details, globalFlags) {
-  if (globalFlags.json) {
-    process.stderr.write(`${JSON.stringify({ event: 'retry', type: details.type, method: details.method, message: details.message, attempt: details.attempt, retries: details.retries })}\n`);
-    return;
-  }
-  const totalAttempts = (details.retries ?? 0) + 1;
-  const codeSuffix = details.code !== undefined && details.code !== null && details.code !== ''
-    ? ` (${details.code})` : '';
-  process.stderr.write(
-    `${details.method} transient ${details.type} error on attempt ${details.attempt}/${totalAttempts}${codeSuffix}; retrying...\n`,
-  );
 }
 
 function buildSendPhotoSuccessPayload({ method, inputChatId, result, attempts }) {
@@ -3557,7 +3463,6 @@ export {
   formatSendTimeoutMessage,
   getFeedbackCooldownRemainingSeconds,
   isCliEntrypoint,
-  logSendRetry,
   main,
   normalizeSendCommandError,
   parseNonNegativeInt,
