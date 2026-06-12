@@ -10,7 +10,10 @@ vi.mock('@mtcute/node', () => ({
   TelegramClient: mtcuteClientCtor,
 }));
 
-vi.mock('@mtcute/core', () => ({
+// Spread the real module so the peer-resolution imports (MtPeerNotFoundError,
+// toggleChannelIdMark, getMarkedPeerId) stay real; only InputMedia is stubbed.
+vi.mock('@mtcute/core', async (importOriginal) => ({
+  ...(await importOriginal()),
   InputMedia: {},
 }));
 
@@ -46,6 +49,7 @@ function createClient({ message, downloadAsNodeStream }) {
   const client = new TelegramClient(12345, 'hash', '+1234567890', '/tmp/tgcli-media-download.session');
   client.ensureLogin = async () => {};
   client.client = {
+    resolvePeer: vi.fn().mockResolvedValue({ _: 'inputPeerUser', userId: 123, accessHash: 0 }),
     getMessages: vi.fn().mockResolvedValue([message]),
     downloadAsNodeStream,
   };

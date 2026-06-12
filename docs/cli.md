@@ -27,6 +27,14 @@ Commands that stay local (no server): `config`, `service`, `doctor`, and `auth`
 Store location: OS app data dir (override with TGCLI_STORE).
 MCP: disabled by default (set `mcp.enabled` in config.json to true to serve MCP).
 
+## Chat identifiers
+`--chat` accepts a numeric chat id or a @username. Group and channel ids are
+negative, but the positive form works too — it resolves to the same chat. A
+bare negative value parses as a flag, so quote it or attach it with `=`:
+`--chat="-4701666782"` or `--chat=-4701666782` (the spaced form
+`--chat -4701666782` also works). Display names are not identifiers; find the
+id with `tgcli channels list --query "<title>"`.
+
 ## auth
 - auth [--qr] [--qr-file <path>] [--force-sms]
   - Interactive login + session bootstrap only: writes the session and exits. It

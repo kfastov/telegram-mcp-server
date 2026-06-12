@@ -229,6 +229,7 @@ describe('POST /control/invoke', () => {
         listDialogs: vi.fn(() => Promise.resolve([{ id: '1', title: 'Warm' }])),
         searchDialogs: vi.fn(() => Promise.resolve([])),
         getGroupInviteLink: vi.fn(() => Promise.resolve({ link: 'https://t.me/+warm' })),
+        canonicalizeChannelId: vi.fn(async (id) => String(id)),
       },
       messageSyncService: {
         setChannelSync: vi.fn(() => ({ channel_id: '@g', sync_enabled: 1 })),

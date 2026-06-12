@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { setTimeout as delay } from 'timers/promises';
-import { Message, PeersIndex, _messageMediaFromTl } from '@mtcute/core';
+import { Message, PeersIndex, _messageMediaFromTl, toggleChannelIdMark } from '@mtcute/core';
 import { normalizeChannelId, summarizeMedia } from './telegram-client.js';
 import { resolveStoreDir, resolveStorePaths } from './core/store.js';
 
@@ -1551,8 +1551,63 @@ export default class MessageSyncService {
     return rows.map((row) => formatContactRow(row));
   }
 
+  // True when the archive holds real data under this key: a channels row with
+  // resolved metadata, or at least one archived message. Bare channels rows
+  // (side effects of addJob/tag inserts) do not count, so a leftover row from
+  // an old failed positive-id enqueue cannot pin the wrong key.
+  _channelKeyHasData(key) {
+    const channelRow = this.db.prepare(`
+      SELECT 1
+      FROM channels
+      WHERE channel_id = ? AND (peer_title IS NOT NULL OR peer_type IS NOT NULL)
+    `).get(key);
+    if (channelRow) {
+      return true;
+    }
+    const messageRow = this.db.prepare(`
+      SELECT 1 FROM messages WHERE channel_id = ? LIMIT 1
+    `).get(key);
+    return Boolean(messageRow);
+  }
+
+  // Maps a chat reference to the archive key that actually holds its data.
+  // Group/channel data is keyed by the marked (negative) id, so a bare positive
+  // id falls back to its channel (-100...) form, then its basic-chat (-id)
+  // form. Keys that already hold data — including user DMs under a positive
+  // key — are returned unchanged; no stored keys are rewritten.
+  resolveArchiveChannelKey(channelId) {
+    const key = normalizeChannelKey(channelId);
+    if (!/^\d+$/.test(key) || this._channelKeyHasData(key)) {
+      return key;
+    }
+    for (const candidate of [String(toggleChannelIdMark(Number(key))), `-${key}`]) {
+      if (this._channelKeyHasData(candidate)) {
+        return candidate;
+      }
+    }
+    return key;
+  }
+
+  // Same sign tolerance for job lookups (status/retry/cancel by chat): a job
+  // enqueued under the canonical negative key is found from the positive id.
+  _resolveJobChannelKey(channelId) {
+    const key = normalizeChannelKey(channelId);
+    const hasJob = (candidate) => Boolean(
+      this.db.prepare('SELECT 1 FROM jobs WHERE channel_id = ? LIMIT 1').get(candidate),
+    );
+    if (!/^\d+$/.test(key) || hasJob(key)) {
+      return key;
+    }
+    for (const candidate of [String(toggleChannelIdMark(Number(key))), `-${key}`]) {
+      if (hasJob(candidate)) {
+        return candidate;
+      }
+    }
+    return key;
+  }
+
   getChannelMetadata(channelId) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const row = this.db.prepare(`
       SELECT
         channels.channel_id,
@@ -1585,7 +1640,7 @@ export default class MessageSyncService {
   }
 
   getChannel(channelId) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const row = this.db.prepare(`
       SELECT
         channels.channel_id,
@@ -1839,7 +1894,7 @@ export default class MessageSyncService {
 
   listJobs(options = {}) {
     const status = options.status ? String(options.status) : null;
-    const channelId = options.channelId ? normalizeChannelKey(options.channelId) : null;
+    const channelId = options.channelId ? this._resolveJobChannelKey(options.channelId) : null;
     const limit = options.limit && options.limit > 0 ? Number(options.limit) : null;
     const clauses = [];
     const params = [];
@@ -1886,7 +1941,7 @@ export default class MessageSyncService {
 
   retryJobs(options = {}) {
     const allErrors = Boolean(options.allErrors);
-    const channelId = options.channelId ? normalizeChannelKey(options.channelId) : null;
+    const channelId = options.channelId ? this._resolveJobChannelKey(options.channelId) : null;
     const jobId = options.jobId !== undefined && options.jobId !== null ? Number(options.jobId) : null;
 
     if (!allErrors && jobId === null && !channelId) {
@@ -1938,7 +1993,7 @@ export default class MessageSyncService {
   }
 
   cancelJobs(options = {}) {
-    const channelId = options.channelId ? normalizeChannelKey(options.channelId) : null;
+    const channelId = options.channelId ? this._resolveJobChannelKey(options.channelId) : null;
     const jobId = options.jobId !== undefined && options.jobId !== null ? Number(options.jobId) : null;
 
     if (jobId === null && !channelId) {
@@ -2208,7 +2263,7 @@ export default class MessageSyncService {
 
   listArchivedMessages({ channelIds, topicId, fromDate, toDate, beforeId, afterId, limit = 50 }) {
     const resolvedIds = Array.isArray(channelIds) ? channelIds : (channelIds ? [channelIds] : []);
-    const normalizedIds = resolvedIds.map((id) => normalizeChannelKey(id)).filter(Boolean);
+    const normalizedIds = resolvedIds.map((id) => this.resolveArchiveChannelKey(id)).filter(Boolean);
     const clauses = [];
     const params = [];
 
@@ -2274,7 +2329,7 @@ export default class MessageSyncService {
   }
 
   getArchivedMessage({ channelId, messageId }) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const row = this.db.prepare(`
       SELECT
         messages.channel_id,
@@ -2305,7 +2360,7 @@ export default class MessageSyncService {
   }
 
   getArchivedMessageContext({ channelId, messageId, before = 20, after = 20 }) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const target = this.getArchivedMessage({ channelId: normalizedId, messageId });
     if (!target) {
       return { target: null, before: [], after: [] };
@@ -2384,7 +2439,7 @@ export default class MessageSyncService {
     const resolvedIds = Array.isArray(options.channelIds)
       ? options.channelIds
       : (options.channelIds ? [options.channelIds] : []);
-    const normalizedIds = resolvedIds.map((id) => normalizeChannelKey(id)).filter(Boolean);
+    const normalizedIds = resolvedIds.map((id) => this.resolveArchiveChannelKey(id)).filter(Boolean);
     const topicId = typeof options.topicId === 'number' ? options.topicId : null;
     const finalLimit = options.limit && options.limit > 0 ? Number(options.limit) : 100;
     const caseInsensitive = options.caseInsensitive !== false;

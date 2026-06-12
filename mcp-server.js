@@ -1442,7 +1442,10 @@ function createServerInstance() {
     scheduleMessageSyncSchema,
     async ({ channelId, depth, minDate }) => {
       await ensureTelegramConnected();
-      const job = messageSyncService.addJob(channelId, { depth, minDate });
+      // Canonicalize before enqueueing so the job and its backfilled messages
+      // land under the same marked-id key the live-sync writer uses.
+      const canonicalChannelId = await telegramClient.canonicalizeChannelId(channelId);
+      const job = messageSyncService.addJob(canonicalChannelId, { depth, minDate });
       void messageSyncService.processQueue();
 
       return {

@@ -73,6 +73,20 @@ function buildProgram() {
     .version(readVersion(), '--version', 'Print version and exit')
     .showHelpAfterError(true);
 
+  // A bare negative chat id (`--chat -100123` works, but a stray `-100123`
+  // parses as a flag) trips commander's unknown-option error; append the exact
+  // workaround. Subcommands share this output configuration by reference, so
+  // one root-level hook covers the whole command tree.
+  program.configureOutput({
+    outputError: (str, write) => {
+      write(str);
+      const match = /unknown option '(-\d+)'/.exec(str);
+      if (match) {
+        write(`Negative chat ids must be quoted or attached with '=': --chat="${match[1]}" or --chat=${match[1]}\n`);
+      }
+    },
+  });
+
   const auth = program.command('auth').description('Authentication and session setup');
   auth
     .option('--force-sms', 'Force SMS code delivery instead of in-app')

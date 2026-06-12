@@ -1,7 +1,10 @@
 vi.mock('@mtcute/node', () => ({
   TelegramClient: vi.fn(),
 }));
-vi.mock('@mtcute/core', () => ({
+// Spread the real module so the peer-resolution imports (MtPeerNotFoundError,
+// toggleChannelIdMark, getMarkedPeerId) stay real; only InputMedia is stubbed.
+vi.mock('@mtcute/core', async (importOriginal) => ({
+  ...(await importOriginal()),
   InputMedia: {
     auto: vi.fn(),
   },

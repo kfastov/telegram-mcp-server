@@ -209,15 +209,24 @@ async function channelShow(ctx, args = {}) {
 // args: { chat, enable }. Toggle the per-chat archive flag; enabling also queues
 // a backfill job when none exists. Returns the new sync state plus job info.
 async function channelSetSync(ctx, args = {}) {
-  const result = ctx.messageSyncService.setChannelSync(args.chat, Boolean(args.enable));
+  // Enabling resolves the canonical archive key live so the channels row, the
+  // job, and the backfilled messages all share the key the live-sync writer
+  // uses (unresolvable chats fail here, before anything is persisted).
+  // Disabling stays a pure DB lookup so unwatching a chat that is no longer
+  // accessible keeps working.
+  const enable = Boolean(args.enable);
+  const chatKey = enable
+    ? await ctx.telegramClient.canonicalizeChannelId(args.chat)
+    : ctx.messageSyncService.resolveArchiveChannelKey(args.chat);
+  const result = ctx.messageSyncService.setChannelSync(chatKey, enable);
   let job = null;
   let jobQueued = false;
-  if (args.enable) {
-    const existing = ctx.messageSyncService.listJobs({ channelId: args.chat, limit: 1 });
+  if (enable) {
+    const existing = ctx.messageSyncService.listJobs({ channelId: chatKey, limit: 1 });
     if (existing.length > 0) {
       job = existing[0];
     } else {
-      job = ctx.messageSyncService.addJob(args.chat);
+      job = ctx.messageSyncService.addJob(chatKey);
       jobQueued = true;
       void ctx.messageSyncService.processQueue();
     }

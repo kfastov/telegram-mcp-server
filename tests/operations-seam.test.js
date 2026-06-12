@@ -44,6 +44,7 @@ beforeEach(() => {
     searchDialogs: vi.fn().mockResolvedValue([{ id: '2', title: 'WarmSearch' }]),
     getGroupInviteLink: vi.fn().mockResolvedValue({ link: 'https://t.me/+warm' }),
     markChannelRead: vi.fn().mockResolvedValue({ channelId: '1', messageId: 9 }),
+    canonicalizeChannelId: vi.fn(async (id) => String(id)),
   };
   hooks.messageSyncService = {
     setChannelSync: vi.fn(() => ({ channel_id: '1', sync_enabled: 1 })),

@@ -1,5 +1,5 @@
 import { TelegramClient as MtCuteClient } from '@mtcute/node';
-import { InputMedia } from '@mtcute/core';
+import { InputMedia, MtPeerNotFoundError, getMarkedPeerId, toggleChannelIdMark } from '@mtcute/core';
 import { randomLong } from '@mtcute/core/utils.js';
 import { html } from '@mtcute/html-parser';
 import { md } from '@mtcute/markdown-parser';
@@ -469,6 +469,12 @@ function resolveDownloadLocation(media) {
   return null;
 }
 
+// Telegram usernames are ASCII word characters; anything else in a string chat
+// reference (spaces, Cyrillic, punctuation) is a display name, which is not an
+// identifier — reject it before any network call with a pointer to the lookup
+// command.
+const USERNAME_SHAPE_PATTERN = /^@?[A-Za-z0-9_]{1,32}$/;
+
 export function normalizeChannelId(channelId) {
   if (typeof channelId === 'number') {
     return channelId;
@@ -937,6 +943,82 @@ class TelegramClient {
     return results;
   }
 
+  // Resolves a chat reference (numeric id in either sign form, @username, or
+  // 'me'/'self') to `{ peer, canonicalId }`: the mtcute input peer plus the
+  // marked-id key the archive uses (`null` for inputPeerSelf, which has no
+  // marked id). Positive numeric ids that miss the cache are retried in their
+  // channel (-100...) form, then the basic-chat (-id) form, so users can
+  // address groups without knowing Telegram's sign conventions. Resolution
+  // failures rethrow the original error with an actionable hint appended.
+  async resolveInputPeer(channelId) {
+    const peerRef = normalizeChannelId(channelId);
+    if (
+      typeof peerRef === 'string'
+      && peerRef !== 'me'
+      && peerRef !== 'self'
+      && !USERNAME_SHAPE_PATTERN.test(peerRef)
+    ) {
+      throw new Error(
+        `"${peerRef}" looks like a display name, not a peer id. Use a numeric chat id or `
+        + `@username — find it with \`tgcli channels list --query "${peerRef}"\`.`,
+      );
+    }
+
+    let peer = null;
+    try {
+      peer = await this.client.resolvePeer(peerRef);
+    } catch (error) {
+      if (!(error instanceof MtPeerNotFoundError)) {
+        throw error;
+      }
+      if (typeof peerRef === 'number' && Number.isInteger(peerRef) && peerRef > 0) {
+        // The channel form is tried first because it is verifiable against the
+        // cache/server; the basic-chat form resolves structurally, so it would
+        // otherwise shadow supergroups.
+        for (const candidate of [toggleChannelIdMark(peerRef), -peerRef]) {
+          try {
+            peer = await this.client.resolvePeer(candidate);
+            break;
+          } catch (fallbackError) {
+            if (!(fallbackError instanceof MtPeerNotFoundError)) {
+              throw fallbackError;
+            }
+          }
+        }
+      }
+      if (!peer) {
+        error.message = `${error.message} — ${this._peerResolutionHint(peerRef)}`;
+        throw error;
+      }
+    }
+
+    // inputPeerSelf has no marked id; callers keep their raw key (e.g. 'me').
+    const canonicalId = peer?._ === 'inputPeerSelf' ? null : String(getMarkedPeerId(peer));
+    return { peer, canonicalId };
+  }
+
+  _peerResolutionHint(peerRef) {
+    if (typeof peerRef === 'number' && peerRef > 0) {
+      return `Group and channel ids are negative — try --chat="-${peerRef}"; list ids with \`tgcli channels list\``;
+    }
+    if (typeof peerRef === 'number') {
+      return 'open the chat once or run `tgcli channels list` to seed the local cache';
+    }
+    return 'if this is a chat title, use the numeric id — see `tgcli channels list --query`';
+  }
+
+  // Canonical archive key for a chat reference. Numeric ids collapse to the
+  // marked id the live-sync writer keys messages by; usernames and 'me'/'self'
+  // pass through unchanged so existing username keying is untouched.
+  async canonicalizeChannelId(channelId) {
+    const peerRef = normalizeChannelId(channelId);
+    if (typeof peerRef !== 'number') {
+      return String(peerRef);
+    }
+    const { canonicalId } = await this.resolveInputPeer(peerRef);
+    return canonicalId ?? String(peerRef);
+  }
+
   async getMessagesByChannelId(channelId, limit = 100, options = {}) {
     await this.ensureLogin();
 
@@ -948,8 +1030,7 @@ class TelegramClient {
       beforeId = 0,
       afterId = 0,
     } = options;
-    const peerRef = normalizeChannelId(channelId);
-    const peer = await this.client.resolvePeer(peerRef);
+    const { peer } = await this.resolveInputPeer(channelId);
 
     const effectiveLimit = limit && limit > 0 ? limit : 100;
     const effectiveBeforeId = normalizePositiveMessageId(beforeId)
@@ -1010,13 +1091,12 @@ class TelegramClient {
 
   async getMessageById(channelId, messageId) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    const [message] = await this.client.getMessages(peerRef, Number(messageId));
+    const { peer } = await this.resolveInputPeer(channelId);
+    const [message] = await this.client.getMessages(peer, Number(messageId));
     if (!message) {
       return null;
     }
-    const peer = message.chat ?? await this.client.resolvePeer(peerRef);
-    return this._serializeMessage(message, peer);
+    return this._serializeMessage(message, message.chat ?? peer);
   }
 
   async getMessageContext(channelId, messageId, options = {}) {
@@ -1029,8 +1109,8 @@ class TelegramClient {
       : 20;
     const total = safeBefore + safeAfter + 1;
 
-    const peerRef = normalizeChannelId(channelId);
-    const [message] = await this.client.getMessages(peerRef, Number(messageId));
+    const { peer: resolvedPeer } = await this.resolveInputPeer(channelId);
+    const [message] = await this.client.getMessages(resolvedPeer, Number(messageId));
     if (!message) {
       return { target: null, before: [], after: [] };
     }
@@ -1042,7 +1122,7 @@ class TelegramClient {
       dateSeconds = Math.floor(message.date);
     }
 
-    const history = await this.client.getHistory(peerRef, {
+    const history = await this.client.getHistory(resolvedPeer, {
       offset: {
         id: message.id,
         date: dateSeconds,
@@ -1051,7 +1131,7 @@ class TelegramClient {
       limit: total,
     });
 
-    const peer = message.chat ?? await this.client.resolvePeer(peerRef);
+    const peer = message.chat ?? resolvedPeer;
     const target = this._serializeMessage(message, peer);
     const before = [];
     const after = [];
@@ -1080,10 +1160,11 @@ class TelegramClient {
     const query = typeof options.query === 'string' ? options.query : '';
     const limit = options.limit && options.limit > 0 ? Number(options.limit) : 50;
     const threadId = typeof options.topicId === 'number' ? options.topicId : undefined;
-    const peerRef = normalizeChannelId(channelId);
-    const peer = await this.client.resolvePeer(peerRef);
+    // Pass the resolved peer object onward: searchMessages re-resolves its
+    // chatId internally, which would discard the sign-fallback work above.
+    const { peer } = await this.resolveInputPeer(channelId);
     const results = await this.client.searchMessages({
-      chatId: peerRef,
+      chatId: peer,
       threadId,
       limit,
       query,
@@ -1216,8 +1297,8 @@ class TelegramClient {
 
   async downloadMessageMedia(channelId, messageId, options = {}) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    const [message] = await this.client.getMessages(peerRef, Number(messageId));
+    const { peer } = await this.resolveInputPeer(channelId);
+    const [message] = await this.client.getMessages(peer, Number(messageId));
     if (!message) {
       throw new Error('Message not found.');
     }
@@ -1397,18 +1478,19 @@ class TelegramClient {
     if (!Number.isInteger(msgId) || msgId <= 0) {
       throw new Error('messageId must be a positive integer');
     }
-    const peerRef = normalizeChannelId(channelId);
-    const peer = await this.client.resolvePeer(peerRef);
+    const { peer } = await this.resolveInputPeer(channelId);
     await this.client.readHistory(peer, { maxId: msgId });
     return { channelId: peer?.id?.toString?.() ?? String(channelId), messageId: msgId };
   }
 
   async getPeerMetadata(channelId, peerType) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
+    // Resolve once up front and feed the peer object to every lookup below;
+    // each of them re-resolves a raw reference internally otherwise.
+    const { peer } = await this.resolveInputPeer(channelId);
 
     const buildUserMetadata = async () => {
-      const user = await this.client.getFullUser(peerRef);
+      const user = await this.client.getFullUser(peer);
       return {
         peerTitle: user.displayName || 'Unknown',
         username: user.username ?? null,
@@ -1429,7 +1511,7 @@ class TelegramClient {
     let chatType = null;
     let isForum = null;
     try {
-      const chat = await this.client.getChat(peerRef);
+      const chat = await this.client.getChat(peer);
       peerTitle = chat.displayName || chat.title || 'Unknown';
       username = chat.username ?? null;
       resolvedType = normalizePeerType(chat);
@@ -1441,7 +1523,7 @@ class TelegramClient {
 
     let about = null;
     try {
-      const fullChat = await this.client.getFullChat(peerRef);
+      const fullChat = await this.client.getFullChat(peer);
       about = fullChat.bio || null;
     } catch (error) {
       about = null;
@@ -1608,9 +1690,11 @@ class TelegramClient {
 
   async getTopicMessages(channelId, topicId, limit = 50, options = {}) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
+    // As in searchChannelMessages: hand searchMessages the resolved peer object
+    // so it does not re-resolve the raw reference internally.
+    const { peer } = await this.resolveInputPeer(channelId);
     const results = await this.client.searchMessages({
-      chatId: peerRef,
+      chatId: peer,
       threadId: topicId,
       limit,
       query: options.query ?? '',

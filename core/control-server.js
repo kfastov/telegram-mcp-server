@@ -129,9 +129,17 @@ export function createControlRequestHandler({
         if (typeof ensureLogin === 'function') {
           await ensureLogin();
         }
+        // Canonicalize the chat reference before enqueueing so the job row and
+        // the backfilled messages share the marked-id key the live-sync writer
+        // uses. Unresolvable ids fail here (500 with the resolution hint, via
+        // the outer catch) instead of leaving a phantom channels row plus a
+        // job that errors later.
+        const canonicalChatId = typeof warmServices?.telegramClient?.canonicalizeChannelId === 'function'
+          ? await warmServices.telegramClient.canonicalizeChannelId(chatId)
+          : chatId;
         // Same path as the scheduleMessageSync MCP tool: enqueue then kick the
         // queue so processing starts without waiting for the next trigger.
-        const job = service.addJob(chatId, { depth: body?.depth, minDate: body?.minDate });
+        const job = service.addJob(canonicalChatId, { depth: body?.depth, minDate: body?.minDate });
         void service.processQueue();
         sendJson(res, 200, {
           jobId: job?.id ?? null,
