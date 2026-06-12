@@ -63,9 +63,11 @@ export function isIdle({ jobCounts, watchedCount, lastActivityAt, now, idleExitM
  *
  * @param {object} deps
  * @param {object} deps.service       MessageSyncService (or compatible stub).
- * @param {object} [deps.warmServices] Warm { telegramClient, messageSyncService }
- *                                     the shared operation handlers run against
- *                                     for /control/invoke.
+ * @param {object} deps.warmServices  Warm { telegramClient, messageSyncService }.
+ *                                    The shared operation handlers run against
+ *                                    it for /control/invoke, and /control/backfill
+ *                                    canonicalizes chat ids through its
+ *                                    telegramClient.
  * @param {string} deps.token         Secret required in the control token header.
  * @param {number} deps.pid           Server process id.
  * @param {string} deps.version       Server version string.
@@ -134,9 +136,7 @@ export function createControlRequestHandler({
         // uses. Unresolvable ids fail here (500 with the resolution hint, via
         // the outer catch) instead of leaving a phantom channels row plus a
         // job that errors later.
-        const canonicalChatId = typeof warmServices?.telegramClient?.canonicalizeChannelId === 'function'
-          ? await warmServices.telegramClient.canonicalizeChannelId(chatId)
-          : chatId;
+        const canonicalChatId = await warmServices.telegramClient.canonicalizeChannelId(chatId);
         // Same path as the scheduleMessageSync MCP tool: enqueue then kick the
         // queue so processing starts without waiting for the next trigger.
         const job = service.addJob(canonicalChatId, { depth: body?.depth, minDate: body?.minDate });

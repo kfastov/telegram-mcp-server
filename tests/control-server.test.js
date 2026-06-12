@@ -67,6 +67,12 @@ describe('control API request handler', () => {
     onActivity = vi.fn();
     const handler = createControlRequestHandler({
       service,
+      // Backfill canonicalizes through the warm client; identity keeps these
+      // routing tests focused on the endpoint contract.
+      warmServices: {
+        telegramClient: { canonicalizeChannelId: vi.fn(async (chatId) => String(chatId)) },
+        messageSyncService: service,
+      },
       token: TOKEN,
       pid: 12345,
       version: '9.9.9',
