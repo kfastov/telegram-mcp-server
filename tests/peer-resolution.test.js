@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MtPeerNotFoundError, toggleChannelIdMark } from '@mtcute/core';
 
 import TelegramClient from '../telegram-client.js';
+import { PEER_SIGN_RETRY_PATTERN } from '../core/peer-hints.js';
 
 const GROUP_ID = 4701666782;
 const CHANNEL_FORM = toggleChannelIdMark(GROUP_ID); // -1004701666782
@@ -91,7 +92,7 @@ describe('resolveInputPeer', () => {
     });
 
     const promise = tc.resolveInputPeer(String(CHANNEL_FORM));
-    await expect(promise).rejects.toThrow(/channels list/);
+    await expect(promise).rejects.toThrow(/seed the local cache/);
     await tc.resolveInputPeer(String(CHANNEL_FORM)).catch((error) => {
       // The original mtcute text is preserved ahead of the hint.
       expect(error.message).toContain(`Peer ${CHANNEL_FORM} is not found in local cache`);
@@ -107,12 +108,16 @@ describe('resolveInputPeer', () => {
       }),
     });
 
-    expect.assertions(4);
+    expect.assertions(5);
     await tc.resolveInputPeer(GROUP_ID).catch((error) => {
       expect(error).toBeInstanceOf(MtPeerNotFoundError);
       expect(error.message).toContain(`Peer ${GROUP_ID} is not found in local cache`);
-      expect(error.message).toContain(`--chat="-${GROUP_ID}"`);
-      expect(error.message).toContain('tgcli channels list');
+      // The hint stays frontend-neutral (the client also backs the MCP server
+      // and control API): no CLI flag syntax, and it matches the pattern the
+      // CLI boundary uses to restate it in flag vocabulary.
+      expect(error.message).not.toContain('--chat');
+      expect(error.message).toContain(`retry with the negative id "-${GROUP_ID}"`);
+      expect(PEER_SIGN_RETRY_PATTERN.exec(error.message)?.[1]).toBe(`-${GROUP_ID}`);
     });
   });
 
@@ -131,7 +136,7 @@ describe('resolveInputPeer', () => {
     await expect(tc.resolveInputPeer('ИП Фастов К.Ю: Ольга Кожан'))
       .rejects.toThrow(/display name/);
     await expect(tc.resolveInputPeer('ИП Фастов К.Ю: Ольга Кожан'))
-      .rejects.toThrow(/channels list --query/);
+      .rejects.toThrow(/search the chat list/);
     expect(tc.client.resolvePeer).not.toHaveBeenCalled();
   });
 
@@ -145,7 +150,7 @@ describe('resolveInputPeer', () => {
     expect.assertions(3);
     await tc.resolveInputPeer('@someuser').catch((error) => {
       expect(error.message).toContain('Peer with username someuser was not found');
-      expect(error.message).toContain('channels list --query');
+      expect(error.message).toContain('search the chat list');
     });
     expect(tc.client.resolvePeer).toHaveBeenCalledWith('@someuser');
   });

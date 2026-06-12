@@ -22,6 +22,7 @@ import {
 } from './core/send-utils.js';
 import { resolveStoreDir } from './core/store.js';
 import { parseDuration } from './core/duration.js';
+import { PEER_SIGN_RETRY_PATTERN } from './core/peer-hints.js';
 import {
   cancelBackfill,
   enqueueBackfill,
@@ -82,7 +83,7 @@ function buildProgram() {
       write(str);
       const match = /unknown option '(-\d+)'/.exec(str);
       if (match) {
-        write(`Negative chat ids must be quoted or attached with '=': --chat="${match[1]}" or --chat=${match[1]}\n`);
+        write(`${negativeChatIdWorkaround(match[1])}\n`);
       }
     },
   });
@@ -702,6 +703,13 @@ function writeJson(payload) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+// The exact flag-quoting workaround for a negative chat id. Shared by the
+// parser's unknown-option hook and writeError so both surfaces phrase it the
+// same way.
+function negativeChatIdWorkaround(id) {
+  return `Negative chat ids must be quoted or attached with '=': --chat="${id}" or --chat=${id}`;
+}
+
 function writeError(error, asJson) {
   if (error instanceof SendCommandError) {
     if (asJson) {
@@ -714,8 +722,15 @@ function writeError(error, asJson) {
   const message = error?.message ?? String(error);
   if (asJson) {
     process.stderr.write(`${JSON.stringify({ ok: false, error: message })}\n`);
-  } else {
-    process.stderr.write(`${message}\n`);
+    return;
+  }
+  process.stderr.write(`${message}\n`);
+  // The client layer suggests retrying with the negative id in
+  // frontend-neutral wording; restate it here in this CLI's flag syntax,
+  // including the quoting trap a bare negative value falls into.
+  const signRetry = PEER_SIGN_RETRY_PATTERN.exec(message);
+  if (signRetry) {
+    process.stderr.write(`${negativeChatIdWorkaround(signRetry[1])}\n`);
   }
 }
 

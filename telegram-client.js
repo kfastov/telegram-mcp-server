@@ -14,6 +14,7 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { nodeReadableToFuman } from '@fuman/node';
 import { resolveStoreDir, resolveStorePaths } from './core/store.js';
+import { peerSignRetryHint } from './core/peer-hints.js';
 
 const timeoutPatchKey = Symbol.for('tgcli.timeoutPatch');
 if (!globalThis[timeoutPatchKey]) {
@@ -471,8 +472,8 @@ function resolveDownloadLocation(media) {
 
 // Telegram usernames are ASCII word characters; anything else in a string chat
 // reference (spaces, Cyrillic, punctuation) is a display name, which is not an
-// identifier — reject it before any network call with a pointer to the lookup
-// command.
+// identifier — reject it before any network call with guidance to look the id
+// up in the chat list.
 const USERNAME_SHAPE_PATTERN = /^@?[A-Za-z0-9_]{1,32}$/;
 
 export function normalizeChannelId(channelId) {
@@ -960,7 +961,7 @@ class TelegramClient {
     ) {
       throw new Error(
         `"${peerRef}" looks like a display name, not a peer id. Use a numeric chat id or `
-        + `@username — find it with \`tgcli channels list --query "${peerRef}"\`.`,
+        + `@username — search the chat list for "${peerRef}" to find its id.`,
       );
     }
 
@@ -997,14 +998,17 @@ class TelegramClient {
     return { peer, canonicalId };
   }
 
+  // Hints stay frontend-neutral (this client backs the CLI, the MCP server,
+  // and the control API); the sign-retry phrasing comes from the shared
+  // peer-hints vocabulary so frontends can recognize and restate it.
   _peerResolutionHint(peerRef) {
     if (typeof peerRef === 'number' && peerRef > 0) {
-      return `Group and channel ids are negative — try --chat="-${peerRef}"; list ids with \`tgcli channels list\``;
+      return peerSignRetryHint(peerRef);
     }
     if (typeof peerRef === 'number') {
-      return 'open the chat once or run `tgcli channels list` to seed the local cache';
+      return 'open the chat once or list the chats to seed the local cache';
     }
-    return 'if this is a chat title, use the numeric id — see `tgcli channels list --query`';
+    return 'if this is a chat title, search the chat list for the numeric id';
   }
 
   // Canonical archive key for a chat reference. Numeric ids collapse to the
