@@ -11,6 +11,7 @@ import os from 'os';
 import path from 'path';
 import readline from 'readline';
 import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { nodeReadableToFuman } from '@fuman/node';
 import { resolveStoreDir, resolveStorePaths } from './core/store.js';
 
@@ -1233,7 +1234,19 @@ class TelegramClient {
       summary,
     });
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    await this.client.downloadToFile(targetPath, location);
+    // pipeline resolves only after the write stream has fully flushed to disk,
+    // so the stat below always sees the complete file (mtcute's downloadToFile
+    // resolves before the flush, which made the reported size race to 0).
+    try {
+      await pipeline(this.client.downloadAsNodeStream(location), fs.createWriteStream(targetPath));
+    } catch (error) {
+      try {
+        fs.rmSync(targetPath, { force: true });
+      } catch {
+        // Best-effort cleanup of the partial file; surface the original error.
+      }
+      throw error;
+    }
     const stats = fs.statSync(targetPath);
 
     return {
