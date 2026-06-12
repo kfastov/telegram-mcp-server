@@ -154,8 +154,8 @@ describe('peer canonicalization', () => {
       makeService();
       const canonicalizeChannelId = vi.fn(async () => {
         throw new Error(
-          `Peer ${GROUP_ID} is not found in local cache — Group and channel ids are negative — `
-          + `try --chat="-${GROUP_ID}"; list ids with \`tgcli channels list\``,
+          `Peer ${GROUP_ID} is not found in local cache — group and channel ids are negative — `
+          + `retry with the negative id "-${GROUP_ID}"`,
         );
       });
       const addJobSpy = vi.spyOn(service, 'addJob');
@@ -176,7 +176,7 @@ describe('peer canonicalization', () => {
         });
 
         expect(status).toBe(500);
-        expect(json.error).toContain(`--chat="-${GROUP_ID}"`);
+        expect(json.error).toContain(`retry with the negative id "-${GROUP_ID}"`);
         expect(addJobSpy).not.toHaveBeenCalled();
 
         const channelRows = service.db.prepare(
@@ -287,6 +287,38 @@ describe('peer canonicalization', () => {
       expect(service.getChannel(String(bareId))?.channelId).toBe(markedKey);
       expect(service.getArchivedMessage({ channelId: String(bareId), messageId: 12 })?.channelId)
         .toBe(markedKey);
+    });
+  });
+
+  describe('sign tolerance across the remaining archive entry points', () => {
+    it('stats, plain reads, and regex search find negative-keyed data from the positive id', () => {
+      makeService();
+      seedChannel(service, CANONICAL_ID);
+      seedMessage(service, CANONICAL_ID, { id: 100, date: 1700000100, text: 'hello world' });
+
+      expect(service.getMessageStats(GROUP_ID).total).toBe(1);
+      expect(service.getArchivedMessages({ channelId: GROUP_ID })).toHaveLength(1);
+
+      const matches = service.searchMessages({ channelId: GROUP_ID, pattern: 'hello' });
+      expect(matches).toHaveLength(1);
+      expect(matches[0].messageId).toBe(100);
+    });
+
+    it('tags and topics written via the positive id attach to the negative key', () => {
+      makeService();
+      seedChannel(service, CANONICAL_ID);
+      seedMessage(service, CANONICAL_ID, { id: 100, date: 1700000100, text: 'data' });
+
+      service.setChannelTags(GROUP_ID, ['work']);
+      const tagKeys = service.db.prepare('SELECT DISTINCT channel_id FROM channel_tags').all()
+        .map((row) => row.channel_id);
+      expect(tagKeys).toEqual([CANONICAL_ID]);
+      expect(service.listChannelTags(GROUP_ID).map((entry) => entry.tag)).toEqual(['work']);
+
+      service.upsertTopics(GROUP_ID, [{ id: 7, title: 'General' }]);
+      const topicKeys = service.db.prepare('SELECT DISTINCT channel_id FROM topics').all()
+        .map((row) => row.channel_id);
+      expect(topicKeys).toEqual([CANONICAL_ID]);
     });
   });
 

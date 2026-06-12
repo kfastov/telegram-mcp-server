@@ -1268,7 +1268,7 @@ export default class MessageSyncService {
   }
 
   upsertTopics(channelId, topics = []) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const entries = [];
     for (const topic of topics || []) {
       const id = typeof topic.id === 'number' ? topic.id : Number(topic.id);
@@ -1312,7 +1312,7 @@ export default class MessageSyncService {
   }
 
   setChannelTags(channelId, tags, options = {}) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const source = options.source ? String(options.source) : 'manual';
     const uniqueTags = new Set();
     for (const tag of tags || []) {
@@ -1334,7 +1334,7 @@ export default class MessageSyncService {
   }
 
   listChannelTags(channelId, options = {}) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const source = options.source ? String(options.source) : null;
     const rows = this.db.prepare(`
       SELECT tag, source, confidence, created_at, updated_at
@@ -1570,40 +1570,37 @@ export default class MessageSyncService {
     return Boolean(messageRow);
   }
 
-  // Maps a chat reference to the archive key that actually holds its data.
-  // Group/channel data is keyed by the marked (negative) id, so a bare positive
-  // id falls back to its channel (-100...) form, then its basic-chat (-id)
-  // form. Keys that already hold data — including user DMs under a positive
-  // key — are returned unchanged; no stored keys are rewritten.
-  resolveArchiveChannelKey(channelId) {
+  // Sign-fallback core shared by archive and job key lookups. Group/channel
+  // rows are keyed by the marked (negative) id, so a bare positive key that
+  // `hasData` rejects is retried in its channel (-100...) form, then its
+  // basic-chat (-id) form, keeping the first form that holds data. Non-numeric
+  // keys and keys that already hold data — including user DMs under a positive
+  // key — are returned unchanged.
+  _resolveKeyBySign(channelId, hasData) {
     const key = normalizeChannelKey(channelId);
-    if (!/^\d+$/.test(key) || this._channelKeyHasData(key)) {
+    if (!/^\d+$/.test(key) || hasData(key)) {
       return key;
     }
     for (const candidate of [String(toggleChannelIdMark(Number(key))), `-${key}`]) {
-      if (this._channelKeyHasData(candidate)) {
+      if (hasData(candidate)) {
         return candidate;
       }
     }
     return key;
   }
 
+  // Maps a chat reference to the archive key that actually holds its data;
+  // no stored keys are rewritten.
+  resolveArchiveChannelKey(channelId) {
+    return this._resolveKeyBySign(channelId, (key) => this._channelKeyHasData(key));
+  }
+
   // Same sign tolerance for job lookups (status/retry/cancel by chat): a job
   // enqueued under the canonical negative key is found from the positive id.
   _resolveJobChannelKey(channelId) {
-    const key = normalizeChannelKey(channelId);
-    const hasJob = (candidate) => Boolean(
-      this.db.prepare('SELECT 1 FROM jobs WHERE channel_id = ? LIMIT 1').get(candidate),
-    );
-    if (!/^\d+$/.test(key) || hasJob(key)) {
-      return key;
-    }
-    for (const candidate of [String(toggleChannelIdMark(Number(key))), `-${key}`]) {
-      if (hasJob(candidate)) {
-        return candidate;
-      }
-    }
-    return key;
+    return this._resolveKeyBySign(channelId, (key) => Boolean(
+      this.db.prepare('SELECT 1 FROM jobs WHERE channel_id = ? LIMIT 1').get(key),
+    ));
   }
 
   getChannelMetadata(channelId) {
@@ -1696,7 +1693,7 @@ export default class MessageSyncService {
 
     let rows;
     if (channelIds && channelIds.length) {
-      rows = channelIds.map((id) => this._getChannelWithMetadata(normalizeChannelKey(id))).filter(Boolean);
+      rows = channelIds.map((id) => this._getChannelWithMetadata(this.resolveArchiveChannelKey(id))).filter(Boolean);
     } else {
       rows = this.db.prepare(`
         SELECT
@@ -1773,7 +1770,7 @@ export default class MessageSyncService {
 
     let rows;
     if (channelIds && channelIds.length) {
-      rows = channelIds.map((id) => this._getChannelWithMetadata(normalizeChannelKey(id))).filter(Boolean);
+      rows = channelIds.map((id) => this._getChannelWithMetadata(this.resolveArchiveChannelKey(id))).filter(Boolean);
     } else {
       rows = this.db.prepare(`
         SELECT
@@ -2212,7 +2209,7 @@ export default class MessageSyncService {
   }
 
   searchMessages({ channelId, topicId, pattern, limit = 50, caseInsensitive = true }) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const flags = caseInsensitive ? 'i' : '';
     let regex;
     try {
@@ -2554,7 +2551,7 @@ export default class MessageSyncService {
   }
 
   getArchivedMessages({ channelId, topicId, limit = 50 }) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const topicClause = typeof topicId === 'number' ? 'AND topic_id = ?' : '';
     const params = typeof topicId === 'number'
       ? [normalizedId, topicId, limit]
@@ -2588,7 +2585,7 @@ export default class MessageSyncService {
   }
 
   getMessageStats(channelId) {
-    const normalizedId = normalizeChannelKey(channelId);
+    const normalizedId = this.resolveArchiveChannelKey(channelId);
     const summary = this.db.prepare(`
       SELECT
         COUNT(*) AS total,
