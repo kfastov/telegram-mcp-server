@@ -1,5 +1,5 @@
 import { TelegramClient as MtCuteClient } from '@mtcute/node';
-import { InputMedia, MtPeerNotFoundError, getMarkedPeerId, toggleChannelIdMark } from '@mtcute/core';
+import { InputMedia, MtPeerNotFoundError, getMarkedPeerId, tl, toggleChannelIdMark } from '@mtcute/core';
 import { randomLong } from '@mtcute/core/utils.js';
 import { html } from '@mtcute/html-parser';
 import { md } from '@mtcute/markdown-parser';
@@ -470,10 +470,10 @@ function resolveDownloadLocation(media) {
   return null;
 }
 
-// Telegram usernames are ASCII word characters; anything else in a string chat
-// reference (spaces, Cyrillic, punctuation) is a display name, which is not an
-// identifier — reject it before any network call with guidance to look the id
-// up in the chat list.
+// Telegram usernames are ASCII word characters; any other string chat
+// reference (spaces, Cyrillic, punctuation, "+7..." phone numbers) is not
+// addressable here — reject it before any network call with guidance to look
+// the id up in the chat list.
 const USERNAME_SHAPE_PATTERN = /^@?[A-Za-z0-9_]{1,32}$/;
 
 export function normalizeChannelId(channelId) {
@@ -960,8 +960,8 @@ class TelegramClient {
       && !USERNAME_SHAPE_PATTERN.test(peerRef)
     ) {
       throw new Error(
-        `"${peerRef}" looks like a display name, not a peer id. Use a numeric chat id or `
-        + `@username — search the chat list for "${peerRef}" to find its id.`,
+        `"${peerRef}" is not a peer id (it looks like a display name or phone number). Use a `
+        + `numeric chat id or @username — search the chat list for "${peerRef}" to find its id.`,
       );
     }
 
@@ -973,12 +973,23 @@ class TelegramClient {
         throw error;
       }
       if (typeof peerRef === 'number' && Number.isInteger(peerRef) && peerRef > 0) {
-        // The channel form is tried first because it is verifiable against the
-        // cache/server; the basic-chat form resolves structurally, so it would
-        // otherwise shadow supergroups.
+        // The channel form is tried first because resolvePeer verifies it
+        // against the cache/server. The basic-chat form NEVER fails in mtcute —
+        // resolvePeer builds inputPeerChat structurally, without consulting
+        // cache or server — so it is only accepted after an existence probe;
+        // otherwise any positive id would "resolve" here and die downstream
+        // with a raw CHAT_ID_INVALID. A bare positive id cannot carry its peer
+        // type, so this fallback can in principle route an uncached user id to
+        // a group with the same bare id; that ambiguity is inherent to
+        // sign-tolerant addressing and accepted here, since cached user ids
+        // resolve directly above and never reach the fallback.
         for (const candidate of [toggleChannelIdMark(peerRef), -peerRef]) {
           try {
-            peer = await this.client.resolvePeer(candidate);
+            const resolved = await this.client.resolvePeer(candidate);
+            if (resolved?._ === 'inputPeerChat' && !(await this._basicChatExists(resolved))) {
+              continue;
+            }
+            peer = resolved;
             break;
           } catch (fallbackError) {
             if (!(fallbackError instanceof MtPeerNotFoundError)) {
@@ -996,6 +1007,32 @@ class TelegramClient {
     // inputPeerSelf has no marked id; callers keep their raw key (e.g. 'me').
     const canonicalId = peer?._ === 'inputPeerSelf' ? null : String(getMarkedPeerId(peer));
     return { peer, canonicalId };
+  }
+
+  // Existence probe for a structurally-resolved basic chat. mtcute's
+  // resolvePeer returns inputPeerChat for any basic-chat-form id without
+  // consulting cache or server, so the peer object alone proves nothing.
+  // The local peer storage answers without a network call for chats seen
+  // before; otherwise getChat asks the server (messages.getChats). A missing
+  // chat surfaces as MtPeerNotFoundError or as Telegram rejecting the id.
+  async _basicChatExists(peer) {
+    const cached = await this.client.storage.peers.getById(getMarkedPeerId(peer));
+    if (cached) {
+      return true;
+    }
+    try {
+      await this.client.getChat(peer);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof MtPeerNotFoundError
+        || tl.RpcError.is(error, 'CHAT_ID_INVALID')
+        || tl.RpcError.is(error, 'PEER_ID_INVALID')
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   // Hints stay frontend-neutral (this client backs the CLI, the MCP server,
@@ -1197,8 +1234,8 @@ class TelegramClient {
     const parseMode = normalizeParseMode(options.parseMode);
     const inputText = applyParseMode(messageText, parseMode);
     const params = buildTextSendParams(options);
-    const peerRef = normalizeChannelId(channelId);
-    const sent = await this.client.sendText(peerRef, inputText, params);
+    const { peer } = await this.resolveInputPeer(channelId);
+    const sent = await this.client.sendText(peer, inputText, params);
     return { messageId: sent.id };
   }
 
@@ -1220,8 +1257,8 @@ class TelegramClient {
     if (options.spoiler) mediaOptions.spoiler = true;
     if (options.forceDocument) mediaOptions.forceDocument = true;
     const media = InputMedia.auto(uploadPath, mediaOptions);
-    const peerRef = normalizeChannelId(channelId);
-    const sent = await this.client.sendMedia(peerRef, media, buildMediaSendParams(options));
+    const { peer } = await this.resolveInputPeer(channelId);
+    const sent = await this.client.sendMedia(peer, media, buildMediaSendParams(options));
     return buildSendMessageResult(sent, { method: 'sendDocument', defaultMediaType: 'document' });
   }
 
@@ -1264,7 +1301,7 @@ class TelegramClient {
   }
 
   async sendPreparedPhotoMessage(prepared) {
-    const peer = await this.client.resolvePeer(prepared.peerRef);
+    const { peer } = await this.resolveInputPeer(prepared.peerRef);
     const chatId = peer?._ === 'inputPeerSelf'
       ? String(prepared.peerRef)
       : this._extractPeerId(peer);
@@ -1278,7 +1315,7 @@ class TelegramClient {
     }
     let sent;
     try {
-      [sent] = await this.client.getMessages(prepared.peerRef, Number(messageId));
+      [sent] = await this.client.getMessages(peer, Number(messageId));
     } catch (error) {
       console.error(`[sendPhoto] getMessages enrichment failed for peer ${prepared.peerRef}, message ${messageId}: ${error.message}`);
     }
@@ -1390,9 +1427,9 @@ class TelegramClient {
 
   async getGroupInfo(channelId) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    const chat = await this.client.getChat(peerRef);
-    const full = await this.client.getFullChat(peerRef).catch(() => null);
+    const { peer } = await this.resolveInputPeer(channelId);
+    const chat = await this.client.getChat(peer);
+    const full = await this.client.getFullChat(peer).catch(() => null);
     return {
       id: chat.id?.toString?.() ?? String(channelId),
       title: chat.displayName || chat.title || 'Unknown',
@@ -1413,8 +1450,8 @@ class TelegramClient {
     if (!value) {
       throw new Error('Group title must be a non-empty string.');
     }
-    const peerRef = normalizeChannelId(channelId);
-    await this.client.setChatTitle(peerRef, value);
+    const { peer } = await this.resolveInputPeer(channelId);
+    await this.client.setChatTitle(peer, value);
     return true;
   }
 
@@ -1424,8 +1461,8 @@ class TelegramClient {
     if (!users.length) {
       throw new Error('userIds must include at least one entry.');
     }
-    const peerRef = normalizeChannelId(channelId);
-    const failed = await this.client.addChatMembers(peerRef, users);
+    const { peer } = await this.resolveInputPeer(channelId);
+    const failed = await this.client.addChatMembers(peer, users);
     return failed.map((entry) => ({
       userId: entry.userId?.toString?.() ?? null,
       error: entry.error ?? null,
@@ -1438,12 +1475,12 @@ class TelegramClient {
     if (!users.length) {
       throw new Error('userIds must include at least one entry.');
     }
-    const peerRef = normalizeChannelId(channelId);
+    const { peer } = await this.resolveInputPeer(channelId);
     const removed = [];
     const failed = [];
     for (const userId of users) {
       try {
-        await this.client.kickChatMember({ chatId: peerRef, userId });
+        await this.client.kickChatMember({ chatId: peer, userId });
         removed.push(String(userId));
       } catch (error) {
         failed.push({ userId: String(userId), error: error?.message ?? String(error) });
@@ -1454,14 +1491,14 @@ class TelegramClient {
 
   async getGroupInviteLink(channelId) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    return this.client.getPrimaryInviteLink(peerRef);
+    const { peer } = await this.resolveInputPeer(channelId);
+    return this.client.getPrimaryInviteLink(peer);
   }
 
   async revokeGroupInviteLink(channelId, link) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    return this.client.revokeInviteLink(peerRef, link);
+    const { peer } = await this.resolveInputPeer(channelId);
+    return this.client.revokeInviteLink(peer, link);
   }
 
   async joinGroup(invite) {
@@ -1471,8 +1508,8 @@ class TelegramClient {
 
   async leaveGroup(channelId) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    await this.client.leaveChat(peerRef);
+    const { peer } = await this.resolveInputPeer(channelId);
+    await this.client.leaveChat(peer);
     return true;
   }
 
@@ -1688,8 +1725,8 @@ class TelegramClient {
 
   async listForumTopics(channelId, options = {}) {
     await this.ensureLogin();
-    const peerRef = normalizeChannelId(channelId);
-    return this.client.getForumTopics(peerRef, options);
+    const { peer } = await this.resolveInputPeer(channelId);
+    return this.client.getForumTopics(peer, options);
   }
 
   async getTopicMessages(channelId, topicId, limit = 50, options = {}) {

@@ -211,9 +211,10 @@ async function channelShow(ctx, args = {}) {
 async function channelSetSync(ctx, args = {}) {
   // Enabling resolves the canonical archive key live so the channels row, the
   // job, and the backfilled messages all share the key the live-sync writer
-  // uses (unresolvable chats fail here, before anything is persisted).
-  // Disabling stays a pure DB lookup so unwatching a chat that is no longer
-  // accessible keeps working.
+  // uses (positive ids that resolve to nothing fail here, before anything is
+  // persisted; explicitly negative basic-chat ids resolve structurally in
+  // mtcute and are enabled as given). Disabling stays a pure DB lookup so
+  // unwatching a chat that is no longer accessible keeps working.
   const enable = Boolean(args.enable);
   const chatKey = enable
     ? await ctx.telegramClient.canonicalizeChannelId(args.chat)

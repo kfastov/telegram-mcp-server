@@ -5,7 +5,7 @@
 // exactly as in production.
 
 import { describe, expect, it, vi } from 'vitest';
-import { MtPeerNotFoundError, toggleChannelIdMark } from '@mtcute/core';
+import { MtPeerNotFoundError, tl, toggleChannelIdMark } from '@mtcute/core';
 
 import TelegramClient from '../telegram-client.js';
 import { PEER_SIGN_RETRY_PATTERN } from '../core/peer-hints.js';
@@ -22,17 +22,34 @@ function notFound(ref) {
 }
 
 // Bare prototype instance with a fake mtcute inner client, mirroring the
-// pattern in send-messages.test.js.
+// pattern in send-messages.test.js. Peer storage defaults to empty so the
+// basic-chat existence probe takes the same path as a fresh session.
 function makeClient(client = {}) {
   const tc = Object.create(TelegramClient.prototype);
   tc.ensureLogin = vi.fn().mockResolvedValue(undefined);
-  tc.client = client;
+  tc.client = {
+    storage: emptyPeerStorage(),
+    ...client,
+  };
   return tc;
 }
 
-// resolvePeer fake that rejects the positive and channel (-100...) forms with
-// MtPeerNotFoundError and resolves the basic-chat (-id) form — the shape of a
-// plain group chat addressed by its bare positive id.
+function emptyPeerStorage() {
+  return { peers: { getById: vi.fn(async () => null) } };
+}
+
+// Peer storage holding the basic chat, as after a dialog sync: the existence
+// probe accepts the structurally-resolved chat without a getChat round-trip.
+function cachedChatStorage() {
+  return { peers: { getById: vi.fn(async (id) => (id === CHAT_FORM ? INPUT_PEER_CHAT : null)) } };
+}
+
+// resolvePeer fake mirroring real mtcute for a bare positive group id: the
+// positive (user-marked) and channel (-100...) forms miss and throw, while the
+// basic-chat (-id) form ALWAYS resolves structurally — real resolvePeer builds
+// inputPeerChat without consulting cache or server and never throws for it.
+// Whether the chat actually exists is decided by the existence probe (peer
+// storage, then getChat), not by resolvePeer.
 function groupResolvePeer() {
   return vi.fn(async (ref) => {
     if (ref === CHAT_FORM) {
@@ -40,6 +57,13 @@ function groupResolvePeer() {
     }
     throw notFound(ref);
   });
+}
+
+// Inner-client fakes for a plain group the account is a member of, addressed
+// by its bare positive id: structural chat-form resolution plus a storage hit
+// in the existence probe.
+function cachedGroupClient(extra = {}) {
+  return { resolvePeer: groupResolvePeer(), storage: cachedChatStorage(), ...extra };
 }
 
 describe('resolveInputPeer', () => {
@@ -56,7 +80,7 @@ describe('resolveInputPeer', () => {
   });
 
   it('falls back from a positive group id to the chat form, channel form first', async () => {
-    const tc = makeClient({ resolvePeer: groupResolvePeer() });
+    const tc = makeClient(cachedGroupClient());
 
     const result = await tc.resolveInputPeer(String(GROUP_ID));
 
@@ -64,6 +88,19 @@ describe('resolveInputPeer', () => {
     expect(result.canonicalId).toBe(String(CHAT_FORM));
     expect(tc.client.resolvePeer.mock.calls.map(([ref]) => ref))
       .toEqual([GROUP_ID, CHANNEL_FORM, CHAT_FORM]);
+    // The structural inputPeerChat was accepted via the storage probe.
+    expect(tc.client.storage.peers.getById).toHaveBeenCalledWith(CHAT_FORM);
+  });
+
+  it('confirms an uncached basic chat with getChat before accepting the structural peer', async () => {
+    const getChat = vi.fn().mockResolvedValue({ id: GROUP_ID, displayName: 'Group' });
+    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat });
+
+    const result = await tc.resolveInputPeer(GROUP_ID);
+
+    expect(result.peer).toBe(INPUT_PEER_CHAT);
+    expect(result.canonicalId).toBe(String(CHAT_FORM));
+    expect(getChat).toHaveBeenCalledWith(INPUT_PEER_CHAT);
   });
 
   it('resolves a positive supergroup id via the channel form without trying the chat form', async () => {
@@ -102,13 +139,16 @@ describe('resolveInputPeer', () => {
   });
 
   it('decorates a positive id miss with the negative-id workaround', async () => {
-    const tc = makeClient({
-      resolvePeer: vi.fn(async (ref) => {
-        throw notFound(ref);
-      }),
-    });
+    // Real failure shape for a nonexistent id (and for an uncached supergroup):
+    // the positive and channel forms throw, the basic-chat form resolves
+    // structurally, and the existence probe (storage miss, then getChat)
+    // rejects it — the structural inputPeerChat must NOT be accepted.
+    const getChat = vi.fn().mockRejectedValue(
+      new MtPeerNotFoundError(`Chat ${GROUP_ID} was not found`),
+    );
+    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat });
 
-    expect.assertions(5);
+    expect.assertions(7);
     await tc.resolveInputPeer(GROUP_ID).catch((error) => {
       expect(error).toBeInstanceOf(MtPeerNotFoundError);
       expect(error.message).toContain(`Peer ${GROUP_ID} is not found in local cache`);
@@ -119,6 +159,25 @@ describe('resolveInputPeer', () => {
       expect(error.message).toContain(`retry with the negative id "-${GROUP_ID}"`);
       expect(PEER_SIGN_RETRY_PATTERN.exec(error.message)?.[1]).toBe(`-${GROUP_ID}`);
     });
+    expect(tc.client.resolvePeer.mock.calls.map(([ref]) => ref))
+      .toEqual([GROUP_ID, CHANNEL_FORM, CHAT_FORM]);
+    expect(getChat).toHaveBeenCalledWith(INPUT_PEER_CHAT);
+  });
+
+  it('treats a Telegram id rejection in the probe as a miss', async () => {
+    const getChat = vi.fn().mockRejectedValue(new tl.RpcError(400, 'CHAT_ID_INVALID'));
+    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat });
+
+    await expect(tc.resolveInputPeer(GROUP_ID))
+      .rejects.toThrow(/retry with the negative id/);
+  });
+
+  it('propagates unexpected probe failures instead of swallowing them', async () => {
+    const networkError = new Error('connection lost');
+    const getChat = vi.fn().mockRejectedValue(networkError);
+    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat });
+
+    await expect(tc.resolveInputPeer(GROUP_ID)).rejects.toBe(networkError);
   });
 
   it('rethrows non-MtPeerNotFoundError failures unmodified, with no fallback attempts', async () => {
@@ -181,7 +240,7 @@ describe('canonicalizeChannelId', () => {
   });
 
   it('collapses a positive group id to the marked key the live writer uses', async () => {
-    const tc = makeClient({ resolvePeer: groupResolvePeer() });
+    const tc = makeClient(cachedGroupClient());
 
     await expect(tc.canonicalizeChannelId(String(GROUP_ID))).resolves.toBe(String(CHAT_FORM));
   });
@@ -205,7 +264,7 @@ describe('live read paths pass the resolved peer object onward', () => {
 
   it('searchChannelMessages hands searchMessages the peer object for a positive group id', async () => {
     const searchMessages = vi.fn().mockResolvedValue(searchResults());
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), searchMessages });
+    const tc = makeClient(cachedGroupClient({ searchMessages }));
 
     const result = await tc.searchChannelMessages(String(GROUP_ID), { query: 'hit' });
 
@@ -217,7 +276,7 @@ describe('live read paths pass the resolved peer object onward', () => {
 
   it('getTopicMessages hands searchMessages the peer object', async () => {
     const searchMessages = vi.fn().mockResolvedValue(searchResults());
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), searchMessages });
+    const tc = makeClient(cachedGroupClient({ searchMessages }));
 
     const result = await tc.getTopicMessages(String(GROUP_ID), 7, 50);
 
@@ -230,7 +289,7 @@ describe('live read paths pass the resolved peer object onward', () => {
     const iterHistory = vi.fn(() => (async function* () {
       yield { id: 5, date: 1700000000, text: 'old' };
     })());
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), iterHistory });
+    const tc = makeClient(cachedGroupClient({ iterHistory }));
 
     const result = await tc.getMessagesByChannelId(String(GROUP_ID), 10);
 
@@ -240,7 +299,7 @@ describe('live read paths pass the resolved peer object onward', () => {
 
   it('getMessageById fetches via the peer object', async () => {
     const getMessages = vi.fn().mockResolvedValue([{ id: 5, date: 1700000000, text: 'one' }]);
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), getMessages });
+    const tc = makeClient(cachedGroupClient({ getMessages }));
 
     const message = await tc.getMessageById(String(GROUP_ID), 5);
 
@@ -255,7 +314,7 @@ describe('live read paths pass the resolved peer object onward', () => {
       { id: 5, date: 1700000000, text: 'target' },
       { id: 6, date: 1700000001, text: 'after' },
     ]);
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), getMessages, getHistory });
+    const tc = makeClient(cachedGroupClient({ getMessages, getHistory }));
 
     const context = await tc.getMessageContext(String(GROUP_ID), 5, { before: 1, after: 1 });
 
@@ -268,7 +327,7 @@ describe('live read paths pass the resolved peer object onward', () => {
 
   it('downloadMessageMedia looks the message up via the peer object', async () => {
     const getMessages = vi.fn().mockResolvedValue([{ id: 5, date: 1700000000, media: null }]);
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), getMessages });
+    const tc = makeClient(cachedGroupClient({ getMessages }));
 
     // No media on the message: the relevant assertion is that the lookup got
     // past peer resolution and used the resolved peer object.
@@ -279,7 +338,7 @@ describe('live read paths pass the resolved peer object onward', () => {
   it('getPeerMetadata resolves a positive group id and feeds the peer to chat lookups', async () => {
     const getChat = vi.fn().mockResolvedValue({ displayName: 'Group', chatType: 'group' });
     const getFullChat = vi.fn().mockResolvedValue({ bio: 'about' });
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat, getFullChat });
+    const tc = makeClient(cachedGroupClient({ getChat, getFullChat }));
 
     const metadata = await tc.getPeerMetadata(String(GROUP_ID));
 
@@ -291,11 +350,56 @@ describe('live read paths pass the resolved peer object onward', () => {
 
   it('markChannelRead resolves through the sign fallback', async () => {
     const readHistory = vi.fn().mockResolvedValue(undefined);
-    const tc = makeClient({ resolvePeer: groupResolvePeer(), readHistory });
+    const tc = makeClient(cachedGroupClient({ readHistory }));
 
     const result = await tc.markChannelRead(String(GROUP_ID), 9);
 
     expect(readHistory).toHaveBeenCalledWith(INPUT_PEER_CHAT, { maxId: 9 });
     expect(result.messageId).toBe(9);
+  });
+});
+
+describe('send and group-management paths resolve through the sign fallback', () => {
+  it('sendTextMessage sends to the resolved peer for a positive group id', async () => {
+    const sendText = vi.fn().mockResolvedValue({ id: 11 });
+    const tc = makeClient(cachedGroupClient({ sendText }));
+
+    const result = await tc.sendTextMessage(String(GROUP_ID), 'hello');
+
+    expect(sendText).toHaveBeenCalledWith(INPUT_PEER_CHAT, 'hello', undefined);
+    expect(result.messageId).toBe(11);
+  });
+
+  it('sendTextMessage surfaces the hinted resolution error for a dead positive id', async () => {
+    const sendText = vi.fn();
+    const getChat = vi.fn().mockRejectedValue(
+      new MtPeerNotFoundError(`Chat ${GROUP_ID} was not found`),
+    );
+    const tc = makeClient({ resolvePeer: groupResolvePeer(), getChat, sendText });
+
+    await expect(tc.sendTextMessage(String(GROUP_ID), 'hello'))
+      .rejects.toThrow(/retry with the negative id/);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('renameGroup and invite-link calls hand mtcute the resolved peer', async () => {
+    const setChatTitle = vi.fn().mockResolvedValue(undefined);
+    const getPrimaryInviteLink = vi.fn().mockResolvedValue({ link: 'https://t.me/+x' });
+    const tc = makeClient(cachedGroupClient({ setChatTitle, getPrimaryInviteLink }));
+
+    await tc.renameGroup(String(GROUP_ID), 'New title');
+    await tc.getGroupInviteLink(String(GROUP_ID));
+
+    expect(setChatTitle).toHaveBeenCalledWith(INPUT_PEER_CHAT, 'New title');
+    expect(getPrimaryInviteLink).toHaveBeenCalledWith(INPUT_PEER_CHAT);
+  });
+
+  it('addGroupMembers passes the resolved peer to addChatMembers', async () => {
+    const addChatMembers = vi.fn().mockResolvedValue([]);
+    const tc = makeClient(cachedGroupClient({ addChatMembers }));
+
+    await tc.addGroupMembers(String(GROUP_ID), ['@user1']);
+
+    expect(addChatMembers).toHaveBeenCalledWith(INPUT_PEER_CHAT, ['@user1']);
   });
 });

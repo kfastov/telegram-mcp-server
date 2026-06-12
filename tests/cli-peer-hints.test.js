@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildProgram, writeError } from '../cli.js';
 import { PEER_SIGN_RETRY_PATTERN } from '../core/peer-hints.js';
+import { SendCommandError } from '../core/send-utils.js';
 
 const NEGATIVE_ID = '-4701666782';
 
@@ -99,6 +100,23 @@ describe('peer resolution sign-retry hint at the writeError boundary', () => {
     const output = captureStderr(() => writeError(new Error('connection lost'), false));
 
     expect(output).toBe('connection lost\n');
+  });
+
+  it('restates the suggestion for send failures that carry it in details', () => {
+    const error = new SendCommandError({
+      type: 'telegram',
+      method: 'sendText',
+      message: 'Peer 4701666782 is not found in local cache — group and channel ids are '
+        + `negative — retry with the negative id "${NEGATIVE_ID}"`,
+      attempt: 1,
+      retries: 0,
+      retryable: false,
+    });
+
+    const output = captureStderr(() => writeError(error, false));
+
+    expect(output).toContain('sendText failed [telegram]');
+    expect(output).toContain(`--chat="${NEGATIVE_ID}"`);
   });
 
   it('keeps JSON error output machine-readable, without the appended hint', () => {

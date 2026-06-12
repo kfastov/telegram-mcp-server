@@ -710,12 +710,25 @@ function negativeChatIdWorkaround(id) {
   return `Negative chat ids must be quoted or attached with '=': --chat="${id}" or --chat=${id}`;
 }
 
+// The client layer suggests retrying with the negative id in frontend-neutral
+// wording; restate it in this CLI's flag syntax, including the quoting trap a
+// bare negative value falls into.
+function writeSignRetryHint(message) {
+  const signRetry = PEER_SIGN_RETRY_PATTERN.exec(message ?? '');
+  if (signRetry) {
+    process.stderr.write(`${negativeChatIdWorkaround(signRetry[1])}\n`);
+  }
+}
+
 function writeError(error, asJson) {
   if (error instanceof SendCommandError) {
     if (asJson) {
       process.stderr.write(`${JSON.stringify(buildSendErrorPayload(error.details), null, 2)}\n`);
     } else {
+      // Send failures carry the underlying message in details; a failed peer
+      // resolution surfaces its sign-retry suggestion through there.
       process.stderr.write(`${formatSendErrorMessage(error.details)}\n`);
+      writeSignRetryHint(error.details?.message);
     }
     return;
   }
@@ -725,13 +738,7 @@ function writeError(error, asJson) {
     return;
   }
   process.stderr.write(`${message}\n`);
-  // The client layer suggests retrying with the negative id in
-  // frontend-neutral wording; restate it here in this CLI's flag syntax,
-  // including the quoting trap a bare negative value falls into.
-  const signRetry = PEER_SIGN_RETRY_PATTERN.exec(message);
-  if (signRetry) {
-    process.stderr.write(`${negativeChatIdWorkaround(signRetry[1])}\n`);
-  }
+  writeSignRetryHint(message);
 }
 
 function supportsColorOutput() {

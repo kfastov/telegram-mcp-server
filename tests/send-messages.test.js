@@ -26,13 +26,17 @@ import { md } from '@mtcute/markdown-parser';
 import { html } from '@mtcute/html-parser';
 import TelegramClient from '../telegram-client.js';
 
+// Send paths resolve the chat reference up front (resolveInputPeer) and hand
+// mtcute the resolved input peer, not the raw '@chat' ref.
+const RESOLVED_PEER = { _: 'inputPeerChannel', channelId: 999, accessHash: 1 };
+
 function createMockClient() {
   const tc = Object.create(TelegramClient.prototype);
   tc.ensureLogin = vi.fn().mockResolvedValue(undefined);
   tc.client = {
     sendText: vi.fn().mockResolvedValue({ id: 101 }),
     sendMedia: vi.fn().mockResolvedValue({ id: 202 }),
-    resolvePeer: vi.fn().mockResolvedValue({ _: 'inputPeerChannel', channelId: 999 }),
+    resolvePeer: vi.fn().mockResolvedValue(RESOLVED_PEER),
     _normalizeInputMedia: vi.fn(async (media) => ({ _: 'inputMediaUploadedPhoto', media })),
     call: vi.fn().mockResolvedValue({
       updates: [
@@ -71,12 +75,12 @@ describe('send message reply targeting', () => {
       replyToMessageId: 77,
       topicId: 42,
     });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { replyTo: 77 });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { replyTo: 77 });
   });
 
   it('sendTextMessage falls back to topicId when replyToMessageId is missing', async () => {
     await tc.sendTextMessage('@chat', 'hello', { topicId: 42 });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { replyTo: 42 });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { replyTo: 42 });
   });
 
   it('sendFileMessage uses replyToMessageId when both replyToMessageId and topicId are provided', async () => {
@@ -84,17 +88,17 @@ describe('send message reply targeting', () => {
       replyToMessageId: 77,
       topicId: 42,
     });
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), { replyTo: 77 });
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), { replyTo: 77 });
   });
 
   it('sendFileMessage falls back to topicId when replyToMessageId is missing', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, { topicId: 42 });
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), { replyTo: 42 });
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), { replyTo: 42 });
   });
 
   it('sendFileMessage sends without replyTo params when neither replyToMessageId nor topicId is provided', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, {});
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), undefined);
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), undefined);
   });
 });
 
@@ -111,7 +115,7 @@ describe('sendTextMessage parse-mode', () => {
     expect(md).toHaveBeenCalledTimes(1);
     expect(md).toHaveBeenCalledWith('hello **bold**');
     expect(tc.client.sendText).toHaveBeenCalledWith(
-      '@chat',
+      RESOLVED_PEER,
       { text: 'hello **bold**', entities: [{ type: 'bold' }] },
       undefined,
     );
@@ -122,7 +126,7 @@ describe('sendTextMessage parse-mode', () => {
     expect(html).toHaveBeenCalledTimes(1);
     expect(html).toHaveBeenCalledWith('hello <b>bold</b>');
     expect(tc.client.sendText).toHaveBeenCalledWith(
-      '@chat',
+      RESOLVED_PEER,
       { text: 'hello <b>bold</b>', entities: [{ type: 'italic' }] },
       undefined,
     );
@@ -132,14 +136,14 @@ describe('sendTextMessage parse-mode', () => {
     await tc.sendTextMessage('@chat', 'plain text', { parseMode: 'none' });
     expect(md).not.toHaveBeenCalled();
     expect(html).not.toHaveBeenCalled();
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'plain text', undefined);
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'plain text', undefined);
   });
 
   it('no parseMode sends text as-is (backward compat)', async () => {
     await tc.sendTextMessage('@chat', 'plain text');
     expect(md).not.toHaveBeenCalled();
     expect(html).not.toHaveBeenCalled();
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'plain text', undefined);
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'plain text', undefined);
   });
 
   it('parseMode is case-insensitive', async () => {
@@ -169,40 +173,40 @@ describe('sendTextMessage new send parameters', () => {
 
   it('--silent passes silent: true in params', async () => {
     await tc.sendTextMessage('@chat', 'hello', { silent: true });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { silent: true });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { silent: true });
   });
 
   it('--no-forwards passes forbidForwards: true in params', async () => {
     await tc.sendTextMessage('@chat', 'hello', { noforwards: true });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { forbidForwards: true });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { forbidForwards: true });
   });
 
   it('--schedule passes scheduleDate as unix timestamp in params', async () => {
     const scheduleDate = Math.floor(Date.now() / 1000) + 3600;
     await tc.sendTextMessage('@chat', 'hello', { scheduleDate });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { scheduleDate });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { scheduleDate });
   });
 
   it('combined silent + replyTo passes both in params', async () => {
     await tc.sendTextMessage('@chat', 'hello', { silent: true, replyToMessageId: 55 });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { silent: true, replyTo: 55 });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { silent: true, replyTo: 55 });
   });
 
   it('noForwards (camelCase) passes forbidForwards: true in params', async () => {
     await tc.sendTextMessage('@chat', 'hello', { noForwards: true });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { forbidForwards: true });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { forbidForwards: true });
   });
 
   it('schedule (ISO string) passes scheduleDate as unix timestamp', async () => {
     const iso = '2027-01-15T09:00:00Z';
     const expected = Math.floor(new Date(iso).getTime() / 1000);
     await tc.sendTextMessage('@chat', 'hello', { schedule: iso });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', { scheduleDate: expected });
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', { scheduleDate: expected });
   });
 
   it('no new params still sends undefined params (backward compat)', async () => {
     await tc.sendTextMessage('@chat', 'hello');
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', undefined);
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', undefined);
   });
 });
 
@@ -221,17 +225,17 @@ describe('sendFileMessage new send parameters', () => {
 
   it('--silent passes silent: true in params', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, { silent: true });
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), { silent: true });
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), { silent: true });
   });
 
   it('--no-forwards passes forbidForwards: true in params', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, { noforwards: true });
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), { forbidForwards: true });
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), { forbidForwards: true });
   });
 
   it('--caption-above passes invert: true in params', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, { caption: 'my caption', captionAbove: true });
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), { invert: true });
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), { invert: true });
   });
 
   it('--caption-above without caption throws error', async () => {
@@ -260,7 +264,7 @@ describe('sendFileMessage new send parameters', () => {
 
   it('no new params still sends undefined params (backward compat)', async () => {
     await tc.sendFileMessage('@chat', temp.filePath, {});
-    expect(tc.client.sendMedia).toHaveBeenCalledWith('@chat', expect.anything(), undefined);
+    expect(tc.client.sendMedia).toHaveBeenCalledWith(RESOLVED_PEER, expect.anything(), undefined);
   });
 });
 
@@ -386,11 +390,11 @@ describe('resolveScheduleDate error handling', () => {
 
   it('scheduleDate: 0 is treated as absent', async () => {
     await tc.sendTextMessage('@chat', 'hello', { scheduleDate: 0 });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', undefined);
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', undefined);
   });
 
   it('scheduleDate: null is treated as absent', async () => {
     await tc.sendTextMessage('@chat', 'hello', { scheduleDate: null });
-    expect(tc.client.sendText).toHaveBeenCalledWith('@chat', 'hello', undefined);
+    expect(tc.client.sendText).toHaveBeenCalledWith(RESOLVED_PEER, 'hello', undefined);
   });
 });

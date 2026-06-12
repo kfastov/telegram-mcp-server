@@ -27,6 +27,16 @@ function groupResolvePeer() {
   });
 }
 
+// Peer storage holding the basic chat (as after a dialog sync), so the
+// existence probe for the structurally-resolved chat form passes locally.
+function cachedChatStorage() {
+  return {
+    peers: {
+      getById: vi.fn(async (id) => (id === -Number(GROUP_ID) ? INPUT_PEER_CHAT : null)),
+    },
+  };
+}
+
 function searchResults(messages) {
   const results = [...messages];
   results.total = messages.length;
@@ -38,7 +48,7 @@ function searchResults(messages) {
 function makeTelegramClient(inner = {}) {
   const tc = Object.create(TelegramClient.prototype);
   tc.ensureLogin = vi.fn().mockResolvedValue(undefined);
-  tc.client = { resolvePeer: groupResolvePeer(), ...inner };
+  tc.client = { resolvePeer: groupResolvePeer(), storage: cachedChatStorage(), ...inner };
   return tc;
 }
 

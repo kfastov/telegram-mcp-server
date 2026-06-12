@@ -133,9 +133,9 @@ export function createControlRequestHandler({
         }
         // Canonicalize the chat reference before enqueueing so the job row and
         // the backfilled messages share the marked-id key the live-sync writer
-        // uses. Unresolvable ids fail here (500 with the resolution hint, via
-        // the outer catch) instead of leaving a phantom channels row plus a
-        // job that errors later.
+        // uses. Positive ids that resolve to nothing fail here (500 with the
+        // resolution hint, via the outer catch); explicitly negative basic-chat
+        // ids resolve structurally in mtcute and are enqueued as given.
         const canonicalChatId = await warmServices.telegramClient.canonicalizeChannelId(chatId);
         // Same path as the scheduleMessageSync MCP tool: enqueue then kick the
         // queue so processing starts without waiting for the next trigger.
