@@ -1234,9 +1234,10 @@ class TelegramClient {
       summary,
     });
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    // pipeline resolves only after the write stream has fully flushed to disk,
-    // so the stat below always sees the complete file (mtcute's downloadToFile
-    // resolves before the flush, which made the reported size race to 0).
+    // Do not switch to mtcute's downloadToFile: it resolves before its write
+    // stream flushes, so an immediate stat can report 0 bytes. pipeline
+    // resolves only after the destination stream finishes, so the stat below
+    // always sees the complete file.
     try {
       await pipeline(this.client.downloadAsNodeStream(location), fs.createWriteStream(targetPath));
     } catch (error) {
