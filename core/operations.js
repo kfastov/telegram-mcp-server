@@ -852,6 +852,14 @@ async function groupMembersRemove(ctx, args = {}) {
   return { channelId: args.chat, ...result };
 }
 
+// args: { chat, limit?, search? }. Lists group members.
+async function groupMembersList(ctx, args = {}) {
+  return ctx.telegramClient.getGroupMembers(args.chat, {
+    limit: args.limit,
+    search: args.search,
+  });
+}
+
 // args: { chat }. Returns the primary invite-link descriptor.
 async function getGroupInviteLink(ctx, args = {}) {
   return ctx.telegramClient.getGroupInviteLink(args.chat);
@@ -967,6 +975,7 @@ export const OPERATIONS = {
   groupsRename,
   groupMembersAdd,
   groupMembersRemove,
+  groupMembersList,
   getGroupInviteLink,
   revokeGroupInviteLink,
   groupsJoin,

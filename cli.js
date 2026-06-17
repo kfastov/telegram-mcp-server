@@ -534,6 +534,13 @@ function buildProgram() {
     .option('--chat <id|username>', 'Group identifier')
     .option('--user <id>', 'User id', collectList)
     .action(withGlobalOptions((globalFlags, options) => runGroupMembersRemove(globalFlags, options)));
+  groupMembers
+    .command('list')
+    .description('List group members')
+    .option('--chat <id|username>', 'Group identifier')
+    .option('--limit <n>', 'Max members to fetch')
+    .option('--search <text>', 'Filter members by name or username')
+    .action(withGlobalOptions((globalFlags, options) => runGroupMembersList(globalFlags, options)));
   const groupInvite = groups.command('invite').description('Manage invite links');
   groupInvite
     .command('get')
@@ -3180,6 +3187,31 @@ async function runGroupMembersRemove(globalFlags, options = {}) {
     console.log(`Removed: ${result.removed.join(', ')}`);
     if (result.failed.length) {
       console.log(`Failed: ${JSON.stringify(result.failed, null, 2)}`);
+    }
+  }
+}
+
+async function runGroupMembersList(globalFlags, options = {}) {
+  if (!options.chat) {
+    throw new Error('--chat is required');
+  }
+  const members = await runOperation(globalFlags, {
+    op: 'groupMembersList',
+    args: {
+      chat: options.chat,
+      limit: parsePositiveInt(options.limit, '--limit'),
+      search: options.search,
+    },
+  });
+  if (globalFlags.json) {
+    writeJson(members);
+  } else {
+    for (const member of members) {
+      const handle = member.username ? `@${member.username}` : member.userId;
+      const flags = [member.status, member.isBot ? 'bot' : null]
+        .filter(Boolean)
+        .join(', ');
+      console.log(`${member.name}\t${handle}\t${member.userId}${flags ? `\t(${flags})` : ''}`);
     }
   }
 }

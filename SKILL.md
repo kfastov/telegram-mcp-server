@@ -86,6 +86,8 @@ running — check `tgcli backfill status`).
 ```bash
 tgcli contacts search "alex"
 tgcli groups list --query "Nha Trang"
+tgcli groups members list --chat @mygroup           # list all members
+tgcli groups members list --chat @mygroup --search "alex"  # filter by name/username
 ```
 
 ## Output Formats

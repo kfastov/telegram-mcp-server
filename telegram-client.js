@@ -1367,6 +1367,40 @@ class TelegramClient {
     return { removed, failed };
   }
 
+  async getGroupMembers(channelId, options = {}) {
+    await this.ensureLogin();
+    const peerRef = normalizeChannelId(channelId);
+    const limit = options.limit ?? 200;
+    const query = (options.search ?? options.query ?? '').trim();
+    const needle = query.toLowerCase();
+    const members = [];
+    // Pass the query server-side when supported; also filter client-side so the
+    // search works reliably regardless of backend participant-search behaviour.
+    for await (const member of this.client.iterChatMembers(peerRef, {
+      query: query || undefined,
+    })) {
+      const user = member.user ?? {};
+      const name =
+        user.displayName ||
+        [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+        'Unknown';
+      const entry = {
+        userId: user.id?.toString?.() ?? null,
+        username: user.username ?? null,
+        name,
+        isBot: typeof user.isBot === 'boolean' ? user.isBot : null,
+        status: typeof member.status === 'string' ? member.status : null,
+      };
+      if (needle) {
+        const haystack = `${entry.name} ${entry.username ?? ''}`.toLowerCase();
+        if (!haystack.includes(needle)) continue;
+      }
+      members.push(entry);
+      if (members.length >= limit) break;
+    }
+    return members;
+  }
+
   async getGroupInviteLink(channelId) {
     await this.ensureLogin();
     const peerRef = normalizeChannelId(channelId);

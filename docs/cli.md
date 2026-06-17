@@ -193,6 +193,7 @@ Legacy `--offset-id` is accepted as a hidden alias for `--before-id`.
 - groups rename --chat <id> --name "New Name"
 - groups members add --chat <id> --user <id> [--user ...]
 - groups members remove --chat <id> --user <id> [--user ...]
+- groups members list --chat <id> [--limit <n>] [--search <text>]
 - groups invite get --chat <id>
 - groups invite revoke --chat <id>
 - groups join --code <invite-code>
