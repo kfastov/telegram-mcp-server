@@ -586,6 +586,20 @@ const groupsMembersRemoveSchema = {
     .describe("User IDs or usernames to remove"),
 };
 
+const groupsMembersListSchema = {
+  channelId: channelIdSchema.describe("Group ID or username"),
+  limit: z
+    .number({ invalid_type_error: "limit must be a number" })
+    .int()
+    .positive()
+    .optional()
+    .describe("Maximum number of members to fetch (default 200)"),
+  search: z
+    .string({ invalid_type_error: "search must be a string" })
+    .optional()
+    .describe("Filter members by name or username"),
+};
+
 const groupsInviteLinkGetSchema = {
   channelId: channelIdSchema.describe("Group ID or username"),
 };
@@ -1345,6 +1359,29 @@ function createServerInstance() {
           {
             type: "text",
             text: JSON.stringify({ channelId, removed: result.removed, failed: result.failed }, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "groupsMembersList",
+    "Lists members of a group, optionally filtered by name or username.",
+    groupsMembersListSchema,
+    async ({ channelId, limit, search }) => {
+      await ensureTelegramConnected();
+      const members = await OPERATIONS.groupMembersList(warmServices, {
+        chat: channelId,
+        limit,
+        search,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(members, null, 2),
           },
         ],
       };

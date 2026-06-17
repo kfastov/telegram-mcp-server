@@ -189,6 +189,10 @@ This document defines the consolidated MCP tool surface. The goal is fewer tools
 - Params: channelId (required), userIds (array, required)
 - Output: { channelId, removed, failed }.
 
+### groupsMembersList
+- Params: channelId (required), limit (optional, default 200), search (optional)
+- Output: array of { userId, username, name, isBot, status }.
+
 ### groupsInviteLinkGet
 - Params: channelId (required)
 - Output: invite link metadata.
