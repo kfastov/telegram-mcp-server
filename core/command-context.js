@@ -1,7 +1,7 @@
 import { resolveStoreDir } from './store.js';
 import { acquireReadLock, acquireStoreLock } from '../store-lock.js';
 import { createMessageSyncService, createTelegramClient, resolveValidatedConfig } from './services.js';
-import { ensureServer, invoke } from './control-client.js';
+import { ensureServer, invoke, ServerUnavailableError } from './control-client.js';
 import { OPERATIONS } from './operations.js';
 
 // Runs fn(ctx) with exactly the services a command needs, owning the surrounding
@@ -84,20 +84,30 @@ export async function withCommand(globalFlags, opts, fn) {
 // MTProto connection, the open DB, auth, and store locking, so the CLI is a thin
 // client here.
 //
-//   - Auto-start the server when it is not already running (ensureServer), then
-//     ask it to run OPERATIONS[op] against its warm services via POST
-//     /control/invoke and return that result.
-//   - invokeTimeoutMs bounds the client's wait on that request (e.g. the 30s
-//     send default); it is independent of the global --timeout.
+// The common case — a server already running — costs a single round-trip: invoke
+// the op directly. Only when that fails because the server is unreachable
+// (ServerUnavailableError: no control.json or a refused loopback connection) do
+// we start one (ensureServer) and retry the invoke once. An operation that runs
+// and fails (a 4xx/5xx, including a send error) never triggers a server start.
 //
-// A failure to reach or start the server surfaces as a clear error.
+// invokeTimeoutMs bounds the client's wait on each request (e.g. the 30s send
+// default); it is independent of the global --timeout. A request timeout means
+// the server was reached but did not reply in time, so it surfaces to the caller
+// rather than starting a second server.
 export async function runOperation(globalFlags, { op, args, invokeTimeoutMs } = {}) {
   if (!OPERATIONS[op]) {
     throw new Error(`runOperation: unknown operation "${op}"`);
   }
   const storeDir = resolveStoreDir();
-  await ensureServer(storeDir, { idleExit: '60s' });
-  return invoke(storeDir, { op, args, timeoutMs: invokeTimeoutMs });
+  try {
+    return await invoke(storeDir, { op, args, timeoutMs: invokeTimeoutMs });
+  } catch (error) {
+    if (!(error instanceof ServerUnavailableError)) {
+      throw error;
+    }
+    await ensureServer(storeDir, { idleExit: '60s' });
+    return invoke(storeDir, { op, args, timeoutMs: invokeTimeoutMs });
+  }
 }
 
 const VALID_NEEDS = new Set(['telegram', 'archive', 'full', 'worker']);

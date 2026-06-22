@@ -27,6 +27,13 @@ vi.mock('../core/services.js', () => ({
 // Commands routed through the warm server reach it via ensureServer + invoke;
 // stub both so `channels watch/unwatch` resolve to a server invoke without any
 // real process or network.
+class ServerUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ServerUnavailableError';
+  }
+}
+
 vi.mock('../core/control-client.js', () => ({
   ensureServer: (...args) => control.ensureServer(...args),
   invoke: (...args) => control.invoke(...args),
@@ -34,6 +41,7 @@ vi.mock('../core/control-client.js', () => ({
   enqueueBackfill: (...args) => control.enqueueBackfill(...args),
   cancelBackfill: vi.fn(),
   retryBackfill: vi.fn(),
+  ServerUnavailableError,
 }));
 
 vi.mock('../store-lock.js', () => ({
@@ -173,7 +181,8 @@ describe('channels watch / unwatch', () => {
 
   it('`channels watch --chat X` routes channelSetSync(enable) to the server', async () => {
     await runProgram(['channels', 'watch', '--chat', '@chan']);
-    expect(control.ensureServer).toHaveBeenCalledTimes(1);
+    // The server is reachable, so the op invokes directly without a spawn.
+    expect(control.ensureServer).not.toHaveBeenCalled();
     expect(control.invoke).toHaveBeenCalledWith('/tmp/tgcli-test-store', {
       op: 'channelSetSync',
       args: { chat: '@chan', enable: true },

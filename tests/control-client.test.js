@@ -19,6 +19,7 @@ import {
   pingServer,
   readControlFile,
   retryBackfill,
+  ServerUnavailableError,
 } from '../core/control-client.js';
 import { CONTROL_TOKEN_HEADER } from '../core/control-server.js';
 import { SendCommandError } from '../core/send-utils.js';
@@ -157,7 +158,35 @@ describe('invoke', () => {
 
   it('throws the server error message on a non-200 response', async () => {
     global.fetch.mockResolvedValue(jsonResponse(400, { error: 'Unknown operation: nope' }));
-    await expect(invoke(storeDir, { op: 'nope', args: {} })).rejects.toThrow('Unknown operation: nope');
+    const error = await invoke(storeDir, { op: 'nope', args: {} }).catch((e) => e);
+    expect(error.message).toBe('Unknown operation: nope');
+    // An op that ran and failed is NOT a connection failure.
+    expect(error).not.toBeInstanceOf(ServerUnavailableError);
+  });
+
+  it('throws ServerUnavailableError when no control file is present', async () => {
+    fs.rmSync(path.join(storeDir, 'control.json'));
+    const error = await invoke(storeDir, { op: 'listChannels', args: {} }).catch((e) => e);
+    expect(error).toBeInstanceOf(ServerUnavailableError);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('throws ServerUnavailableError on a refused loopback connection', async () => {
+    const refused = new TypeError('fetch failed');
+    refused.cause = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    global.fetch.mockRejectedValue(refused);
+    const error = await invoke(storeDir, { op: 'listChannels', args: {} }).catch((e) => e);
+    expect(error).toBeInstanceOf(ServerUnavailableError);
+    expect(error.cause).toBe(refused);
+  });
+
+  it('re-throws a request timeout (not a connection failure, so no retry/spawn)', async () => {
+    const timeout = new Error('The operation was aborted due to timeout');
+    timeout.name = 'TimeoutError';
+    global.fetch.mockRejectedValue(timeout);
+    const error = await invoke(storeDir, { op: 'sendText', args: {} }).catch((e) => e);
+    expect(error).toBe(timeout);
+    expect(error).not.toBeInstanceOf(ServerUnavailableError);
   });
 
   it('reconstructs a SendCommandError from a sendError payload', async () => {
