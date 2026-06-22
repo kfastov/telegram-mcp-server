@@ -1723,30 +1723,16 @@ async function runBackfillWait(globalFlags) {
   }, globalFlags.timeoutMs);
 }
 
-// Cancel backfills for a chat. Prefer the control server (so an in-flight job is
-// stopped by the worker); fall back to a direct DB delete when no server is up.
+// Cancel backfills for a chat through the control server, auto-starting it when
+// needed so all queue writes go through the sole writer.
 async function runBackfillCancel(globalFlags, options = {}) {
   return runWithTimeout(async () => {
     if (!options.chat) {
       throw new Error('--chat is required');
     }
     const storeDir = resolveStoreDir();
-    const ping = await pingServer(storeDir);
-    let result;
-    if (ping) {
-      result = await cancelBackfill(storeDir, { chatId: options.chat });
-    } else {
-      // No server running: same direct path as `backfill jobs cancel --channel`.
-      const release = acquireStoreLock(storeDir);
-      const { telegramClient, messageSyncService } = createServices({ storeDir });
-      try {
-        result = messageSyncService.cancelJobs({ channelId: options.chat });
-      } finally {
-        await messageSyncService.close();
-        await telegramClient.destroy();
-        release();
-      }
-    }
+    await ensureServer(storeDir, { idleExit: '60s' });
+    const result = await cancelBackfill(storeDir, { chatId: options.chat });
     if (globalFlags.json) {
       writeJson(result);
     } else {
@@ -2286,17 +2272,19 @@ async function runSyncJobsCancel(globalFlags, options = {}) {
   if (jobId && channelId) {
     throw new Error('Use --job-id or --channel, not both');
   }
-  return withCommand(globalFlags, { need: 'archive', lock: 'write' }, async ({ messageSyncService }) => {
-    const result = messageSyncService.cancelJobs({
+  return runWithTimeout(async () => {
+    const storeDir = resolveStoreDir();
+    await ensureServer(storeDir, { idleExit: '60s' });
+    const result = await cancelBackfill(storeDir, {
       jobId,
-      channelId,
+      chatId: channelId,
     });
     if (globalFlags.json) {
       writeJson(result);
     } else {
       console.log(`Canceled ${result.canceled} job(s).`);
     }
-  });
+  }, globalFlags.timeoutMs);
 }
 
 async function runDoctor(globalFlags, options = {}) {
