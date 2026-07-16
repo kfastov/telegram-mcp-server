@@ -1,6 +1,6 @@
 {
   "name": "@kfastov/tgcli",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "description": "Telegram CLI + MCP server powered by MTProto and the official MCP SDK",
   "main": "mcp-server.js",
