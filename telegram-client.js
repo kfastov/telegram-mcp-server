@@ -725,7 +725,6 @@ class TelegramClient {
         console.log('\nScan this QR code in Telegram: Settings -> Devices -> Link Desktop Device');
         const terminalQr = await QRCode.toString(url, { type: 'terminal', small: true });
         console.log(terminalQr);
-        console.log(`QR login URL: ${url}`);
         console.log(`QR expires at: ${expiresLabel}`);
         if (qrFile) {
           console.log(`QR saved to: ${qrFile}`);

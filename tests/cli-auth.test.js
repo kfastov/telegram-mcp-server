@@ -115,10 +115,31 @@ describe('cli auth command', () => {
       useQr: true,
       qrFilePath: '/tmp/tgcli-auth.png',
       json: true,
-      disableUpdates: true,
+      disableUpdates: false,
     }));
     expect(login).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps updates disabled for confirmation-code auth', async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const login = vi.fn().mockResolvedValue(true);
+    createTelegramClientMock.mockReturnValue({
+      telegramClient: {
+        destroy,
+        login,
+      },
+    });
+
+    await runAuthLogin(
+      { json: false, timeoutMs: null },
+      { qr: false, forceSms: false, follow: false },
+    );
+
+    expect(createTelegramClientMock).toHaveBeenCalledWith(expect.objectContaining({
+      useQr: false,
+      disableUpdates: true,
+    }));
   });
 
   it('treats symlinked tgcli binaries as the cli entrypoint', () => {

@@ -1391,7 +1391,9 @@ export async function runAuthLogin(globalFlags, options = {}) {
         useQr: options.qr,
         qrFilePath: options.qrFile,
         json: globalFlags.json,
-        disableUpdates: true,
+        // QR login is completed by mtcute after it receives updateLoginToken.
+        // Keep updates disabled for the regular code flow, but enable them for QR.
+        disableUpdates: !options.qr,
       }));
       const loginSuccess = await telegramClient.login();
       if (!loginSuccess) {

@@ -69,7 +69,6 @@ describe('telegram client qr auth output', () => {
     });
     expect(logSpy).toHaveBeenCalledWith('\nScan this QR code in Telegram: Settings -> Devices -> Link Desktop Device');
     expect(logSpy).toHaveBeenCalledWith('terminal-qr');
-    expect(logSpy).toHaveBeenCalledWith('QR login URL: tg://login?token=abc');
     expect(logSpy).toHaveBeenCalledWith('QR expires at: 2026-04-02T00:00:00.000Z');
     expect(logSpy).toHaveBeenCalledWith('QR saved to: /tmp/tgcli-qr-auth.png');
     expect(stderrWriteSpy).not.toHaveBeenCalled();
